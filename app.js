@@ -34,7 +34,15 @@
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(LS_SET) || 'null');
-      if (s) Object.assign(settings, s);
+      if (s) {
+        // Forward-migration across updates: keep stored values only for
+        // settings this version still defines, and only when the type still
+        // matches. Removed or re-typed settings fall back to defaults
+        // instead of leaking stale values into new logic.
+        for (const k of Object.keys(settings)) {
+          if (s[k] !== undefined && typeof s[k] === typeof settings[k]) settings[k] = s[k];
+        }
+      }
       const r = JSON.parse(localStorage.getItem(LS_ROUTE) || 'null');
       if (r) {
         state.stops = r.stops || [];
@@ -791,6 +799,7 @@
       localStorage.setItem(UI_KEY, JSON.stringify({
         y: window.scrollY || 0,
         mapOpen: !$('mapWrap').hidden,
+        settingsOpen: !$('settingsSheet').hidden,
         draft: $('searchInput') ? $('searchInput').value : '',
       }));
     } catch (e) { /* storage unavailable — restore just skips */ }
@@ -801,6 +810,7 @@
     if (!ui) return;
     if (ui.draft && $('searchInput')) $('searchInput').value = ui.draft;
     if (ui.mapOpen && $('mapWrap').hidden) showMap().catch(() => {});
+    if (ui.settingsOpen && $('settingsSheet').hidden) $('settingsBtn').click();
     if (ui.y) window.scrollTo(0, ui.y);
   }
   let lastUpdateCheck = 0;
@@ -823,6 +833,8 @@
     try {
       const route = localStorage.getItem(LS_ROUTE);
       if (route) localStorage.setItem('rr.route.backup', route);
+      const set = localStorage.getItem(LS_SET);
+      if (set) localStorage.setItem('rr.settings.backup', set);
     } catch (e) {}
     saveUIState();
     toast('Updating to the latest version…');
