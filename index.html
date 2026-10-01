@@ -6,7 +6,7 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261001-200944">
+<meta name="app-version" content="20261001-204247">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -131,6 +131,59 @@
 
 <div id="toast" hidden></div>
 
+<script>
+  /* Boot watchdog: if the app never finishes starting (blank page after an
+     interrupted update, a failed restore, a blocked script…), never leave the
+     user staring at a dead screen with no way out. One automatic reload is
+     attempted; if the page is still dead after that, an escape hatch is shown.
+     Inline on purpose — it must work even when app.js itself fails to load. */
+  (function () {
+    'use strict';
+    var TRIED_KEY = 'rr.bootfail';
+    function tried() {
+      try { return sessionStorage.getItem(TRIED_KEY) === '1'; } catch (e) { return false; }
+    }
+    function markTried() {
+      try { sessionStorage.setItem(TRIED_KEY, '1'); } catch (e) {}
+    }
+    setTimeout(function () {
+      if (window.__rrBooted) return;
+      if (!tried()) { markTried(); location.reload(); return; }
+      document.body.innerHTML =
+        '<div style="min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;' +
+        'align-items:center;justify-content:center;background:#0b0e1a;color:#e8ecf4;' +
+        'font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;padding:28px;text-align:center">' +
+        '<div style="font-size:46px;margin-bottom:14px">🧭</div>' +
+        '<div style="font-size:20px;font-weight:700;margin-bottom:8px">RouteRunner didn&rsquo;t start</div>' +
+        '<div style="color:#9aa3b2;font-size:14px;line-height:1.5;margin-bottom:24px;max-width:300px">' +
+        'The app didn&rsquo;t finish loading. Your stops are saved on this device and won&rsquo;t be touched.</div>' +
+        '<button id="rrRetry" style="width:100%;max-width:300px;padding:15px;border:0;border-radius:12px;' +
+        'background:#3b82f6;color:#fff;font-size:17px;font-weight:700;margin-bottom:12px">Reload</button>' +
+        '<button id="rrNuke" style="width:100%;max-width:300px;padding:15px;border:1px solid #3a4356;' +
+        'border-radius:12px;background:transparent;color:#e8ecf4;font-size:16px">' +
+        'Clear app cache &amp; reload</button></div>';
+      document.getElementById('rrRetry').onclick = function () { location.reload(); };
+      document.getElementById('rrNuke').onclick = function () {
+        var done = function () { location.reload(); };
+        try {
+          var jobs = [];
+          if ('serviceWorker' in navigator && navigator.serviceWorker.getRegistrations) {
+            jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+              return Promise.all(rs.map(function (r) { return r.unregister(); }));
+            }).catch(function () {}));
+          }
+          if (window.caches && caches.keys) {
+            jobs.push(caches.keys().then(function (keys) {
+              return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+            }).catch(function () {}));
+          }
+          Promise.all(jobs).then(done, done);
+          setTimeout(done, 3000);
+        } catch (e) { done(); }
+      };
+    }, 8000);
+  })();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 <script src="core.js"></script>
 <script src="ocr.js"></script>

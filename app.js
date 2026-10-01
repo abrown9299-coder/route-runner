@@ -814,6 +814,9 @@
     if (ui.y) window.scrollTo(0, ui.y);
   }
   let lastUpdateCheck = 0;
+  function ssGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+  function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} }
+  function ssDel(k) { try { sessionStorage.removeItem(k); } catch (e) {} }
   function checkForUpdate() {
     const now = Date.now();
     if (now - lastUpdateCheck < 30000) return; // throttle foreground checks
@@ -822,14 +825,16 @@
     fetch('version.json', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .then((info) => {
-        if (!info || !info.version || info.version === APP_VERSION) return;
-        if (sessionStorage.getItem('rr.updating')) return;
-        applyUpdate(info.version);
+        if (!info || !info.version) return;
+        if (info.version === APP_VERSION) { ssDel('rr.updating'); return; }
+        if (ssGet('rr.updating')) return;
+        // Give a just-resumed webview a beat to settle before navigating away.
+        setTimeout(() => applyUpdate(info.version), 1500);
       })
       .catch(() => {});
   }
   function applyUpdate(serverVersion) {
-    sessionStorage.setItem('rr.updating', '1');
+    ssSet('rr.updating', '1');
     try {
       const route = localStorage.getItem(LS_ROUTE);
       if (route) localStorage.setItem('rr.route.backup', route);
@@ -881,4 +886,5 @@
       navigator.serviceWorker.register('sw.js').catch(() => {});
     });
   }
+  window.__rrBooted = true; // boot watchdog in index.html stands down
 })();
