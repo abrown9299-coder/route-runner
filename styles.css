@@ -17,7 +17,9 @@ body {
   background: var(--bg); color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif;
   padding-bottom: 96px; /* room for action bar */
-  min-height: 100vh;
+  min-height: 100vh; min-height: 100dvh;
+  touch-action: manipulation; /* no double-tap zoom delay */
+  -webkit-text-size-adjust: 100%;
 }
 
 /* Header */
@@ -93,6 +95,7 @@ main { padding: 12px 12px 0; max-width: 640px; margin: 0 auto; }
   border: 1px solid var(--line); background: var(--card2); color: var(--text);
   border-radius: 12px; padding: 12px 14px; font-size: 16px; font-weight: 600;
   cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  -webkit-user-select: none; user-select: none;
 }
 .btn:active { transform: scale(.97); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -111,7 +114,7 @@ main { padding: 12px 12px 0; max-width: 640px; margin: 0 auto; }
 .list-head h2 { margin: 0; font-size: 17px; }
 #stopList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .stop {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 10px;
 }
 .stop .num {
@@ -120,7 +123,8 @@ main { padding: 12px 12px 0; max-width: 640px; margin: 0 auto; }
   display: flex; align-items: center; justify-content: center;
 }
 .stop.is-last .num { background: #000; border: 2px dashed #fff; }
-.stop .info { flex: 1; min-width: 0; }
+.stop .info { flex: 1 1 180px; min-width: 0; }
+.stop .acts { margin-left: auto; }
 .stop .addr { font-size: 15px; font-weight: 600; line-height: 1.25; }
 .stop .meta { font-size: 12px; color: var(--dim); margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
@@ -130,9 +134,15 @@ main { padding: 12px 12px 0; max-width: 640px; margin: 0 auto; }
 .chip.last { background: #111; color: #fff; border: 1px dashed #fff; }
 .stop .acts { display: flex; gap: 2px; align-items: center; }
 .stop .acts button {
-  background: none; border: none; font-size: 20px; padding: 8px 6px; cursor: pointer; color: var(--text);
+  background: none; border: none; font-size: 20px; padding: 10px 8px; cursor: pointer; color: var(--text);
+  min-width: 44px; min-height: 44px; /* thumb-sized tap targets */
+  -webkit-user-select: none; user-select: none;
 }
-.stop .drag { cursor: grab; color: var(--dim); font-size: 18px; padding: 8px 4px; touch-action: none; }
+.stop .drag {
+  cursor: grab; color: var(--dim); font-size: 18px; padding: 8px 4px; touch-action: none;
+  min-height: 44px; display: flex; align-items: center;
+  -webkit-user-select: none; user-select: none;
+}
 .stop.done { opacity: .55; }
 .stop.done .addr { text-decoration: line-through; }
 .stop.done .num { background: var(--green); }
@@ -190,7 +200,7 @@ main { padding: 12px 12px 0; max-width: 640px; margin: 0 auto; }
 }
 .set-row small { display: block; color: var(--dim); font-size: 12px; }
 .set-row input[type=text], .set-row input:not([type]) {
-  width: 55%; padding: 10px; font-size: 15px; border-radius: 10px;
+  width: 55%; padding: 10px; font-size: 16px; border-radius: 10px; /* 16px: no iOS auto-zoom */
   border: 1px solid var(--line); background: var(--card2); color: var(--text);
 }
 .set-row input[type=checkbox] { width: 26px; height: 26px; accent-color: var(--accent); }
@@ -200,7 +210,7 @@ main { padding: 12px 12px 0; max-width: 640px; margin: 0 auto; }
 
 /* Toast */
 #toast {
-  position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); z-index: 60;
+  position: fixed; bottom: calc(100px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 60;
   background: var(--card2); border: 1px solid var(--line); color: var(--text);
   padding: 12px 18px; border-radius: 24px; font-size: 14px; max-width: 90vw; text-align: center;
 }
