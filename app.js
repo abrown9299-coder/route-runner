@@ -97,6 +97,7 @@
     $('progressRing').style.strokeDashoffset = total
       ? 113 - (113 * done / total) : 113;
     $('stopCount').textContent = total ? '(' + total + ')' : '';
+    $('clearAllBtn').style.display = total ? '' : 'none';
 
     const ul = $('stopList');
     ul.innerHTML = '';
@@ -733,6 +734,26 @@
     if (pts.length) mapObj.fitBounds(L.latLngBounds(pts.map((p) => [p.lat, p.lng])).pad(0.15));
   }
 
+  /* ---------- clear all / fresh start ---------- */
+  function resetRoute(fromSettings) {
+    if (!state.stops.length) return;
+    if (!confirm('Clear all ' + state.stops.length + ' stops and start a fresh route?')) return;
+    state.stops = [];
+    state.optimized = false;
+    state.matrixSource = null;
+    state.lastEstimate = null;
+    state.preEstimateMin = 0;
+    state.geocoding = false;
+    state.geocodeStatus = '';
+    state.pinModeStopId = null;
+    $('mapWrap').hidden = true;
+    $('mapToggle').textContent = '🗺 Map';
+    save(); render();
+    if (fromSettings) $('settingsSheet').hidden = true;
+    toast('All stops cleared — fresh route ready');
+  }
+  $('clearAllBtn').onclick = () => resetRoute(false);
+
   /* ---------- settings ---------- */
   $('settingsBtn').onclick = () => {
     $('setStart').value = settings.defaultStart;
@@ -755,13 +776,7 @@
     $('settingsSheet').hidden = true;
     render();
   };
-  $('clearRoute').onclick = () => {
-    if (!confirm('Clear all stops and reset the route?')) return;
-    state.stops = []; state.optimized = false; state.matrixSource = null;
-    save(); render();
-    $('settingsSheet').hidden = true;
-    toast('Route cleared');
-  };
+  $('clearRoute').onclick = () => resetRoute(true);
 
   /* ---------- boot ---------- */
   load();
