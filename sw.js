@@ -1,5 +1,5 @@
-/* RouteRunner service worker — offline app shell. 20261001-193657 is stamped by dev/deploy.py. */
-const CACHE = 'routerunner-20261001-193657';
+/* RouteRunner service worker — offline app shell. 20261001-194200 is stamped by dev/deploy.py. */
+const CACHE = 'routerunner-20261001-194200';
 const SHELL = [
   './', './index.html', './styles.css', './app.js', './core.js', './ocr.js',
   './manifest.json', './icon-192.png', './icon-512.png',
@@ -22,7 +22,7 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   // Never cache API calls or geocoding — only shell + CDN libs.
-  if (/photon|nominatim|osrm|geocoding\.geo\.census|census\.gov/i.test(url.hostname)) return;
+  if (/photon|nominatim|osrm|arcgis|geocoding\.geo\.census|census\.gov/i.test(url.hostname)) return;
   if (e.request.method !== 'GET') return;
   e.respondWith(
     caches.match(e.request).then((hit) => {
