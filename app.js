@@ -778,9 +778,92 @@
   };
   $('clearRoute').onclick = () => resetRoute(true);
 
+  /* ---------- auto-update: newest version on every open, place restored ----------
+   * version.json (never cached) is compared against the APP_VERSION stamped
+   * into index.html at deploy time. On mismatch the UI state is snapshotted,
+   * the new service worker is activated, and the page reloads onto the new
+   * build — route data (already in localStorage) plus UI state are restored.
+   * Offline or failed check = silent no-op. */
+  const APP_VERSION = (document.querySelector('meta[name="app-version"]') || {}).content || 'dev';
+  const UI_KEY = 'rr.ui.v1';
+  function saveUIState() {
+    try {
+      localStorage.setItem(UI_KEY, JSON.stringify({
+        y: window.scrollY || 0,
+        mapOpen: !$('mapWrap').hidden,
+        draft: $('searchInput') ? $('searchInput').value : '',
+      }));
+    } catch (e) { /* storage unavailable — restore just skips */ }
+  }
+  function restoreUIState() {
+    let ui = null;
+    try { ui = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); } catch (e) {}
+    if (!ui) return;
+    if (ui.draft && $('searchInput')) $('searchInput').value = ui.draft;
+    if (ui.mapOpen && $('mapWrap').hidden) showMap().catch(() => {});
+    if (ui.y) window.scrollTo(0, ui.y);
+  }
+  let lastUpdateCheck = 0;
+  function checkForUpdate() {
+    const now = Date.now();
+    if (now - lastUpdateCheck < 30000) return; // throttle foreground checks
+    lastUpdateCheck = now;
+    if (typeof fetch !== 'function') return;
+    fetch('version.json', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info) => {
+        if (!info || !info.version || info.version === APP_VERSION) return;
+        if (sessionStorage.getItem('rr.updating')) return;
+        applyUpdate(info.version);
+      })
+      .catch(() => {});
+  }
+  function applyUpdate(serverVersion) {
+    sessionStorage.setItem('rr.updating', '1');
+    try {
+      const route = localStorage.getItem(LS_ROUTE);
+      if (route) localStorage.setItem('rr.route.backup', route);
+    } catch (e) {}
+    saveUIState();
+    toast('Updating to the latest version…');
+    const getReg = ('serviceWorker' in navigator) && navigator.serviceWorker.getRegistration
+      ? navigator.serviceWorker.getRegistration().catch(() => null)
+      : Promise.resolve(null);
+    Promise.resolve(getReg).then((reg) => {
+      if (reg && typeof reg.update === 'function') {
+        let done = false;
+        const finish = () => { if (!done) { done = true; location.reload(); } };
+        if (navigator.serviceWorker.addEventListener) {
+          navigator.serviceWorker.addEventListener('controllerchange', finish, { once: true });
+        }
+        reg.update().catch(() => {});
+        setTimeout(finish, 8000); // fallback if the worker stalls
+      } else {
+        // No service worker control: cache-busting reload, param stripped on boot.
+        const u = new URL(location.href);
+        u.searchParams.set('v', serverVersion);
+        location.href = u.toString();
+      }
+    });
+  }
+
   /* ---------- boot ---------- */
   load();
   if (!loadSharedRoute()) render();
+  try {
+    const u = new URL(location.href);
+    if (u.searchParams.has('v')) {
+      u.searchParams.delete('v');
+      history.replaceState(null, '', u.pathname + u.search + u.hash);
+    }
+  } catch (e) {}
+  restoreUIState();
+  checkForUpdate();
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) saveUIState();
+    else checkForUpdate();
+  });
+  window.addEventListener('pagehide', saveUIState);
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('sw.js').catch(() => {});
