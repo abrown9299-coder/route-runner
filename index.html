@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RouteRunner</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b0e1a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="logo">🏁</span>
+    <div>
+      <h1>RouteRunner</h1>
+      <p id="routeDate"></p>
+    </div>
+  </div>
+  <div class="top-right">
+    <div id="progressWrap" title="Stops completed">
+      <svg viewBox="0 0 44 44" width="44" height="44">
+        <circle cx="22" cy="22" r="18" fill="none" stroke="#2a2f45" stroke-width="6"/>
+        <circle id="progressRing" cx="22" cy="22" r="18" fill="none" stroke="#22c55e"
+                stroke-width="6" stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113"
+                transform="rotate(-90 22 22)"/>
+      </svg>
+      <span id="progressText">0/0</span>
+    </div>
+    <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙️</button>
+  </div>
+</header>
+
+<main>
+  <!-- Origin -->
+  <section id="originBar" class="card">
+    <button id="originBtn" class="origin-btn">
+      <span class="origin-pin">📍</span>
+      <span class="origin-text"><small>START</small><span id="originLabel">Current location</span></span>
+      <span class="origin-edit">✏️</span>
+    </button>
+  </section>
+
+  <!-- Add stops -->
+  <section id="addBar" class="card">
+    <div id="searchWrap">
+      <input id="searchInput" type="text" placeholder="🔍 Search address to add…" autocomplete="off"
+             enterkeyhint="search">
+      <ul id="suggestList" hidden></ul>
+    </div>
+    <div class="add-btns">
+      <button id="ocrBtn" class="btn secondary">📷<span>Screenshots</span></button>
+      <button id="manualBtn" class="btn secondary">⌨️<span>Manual</span></button>
+      <input id="fileInput" type="file" accept="image/*" multiple hidden>
+    </div>
+    <div id="manualForm" hidden>
+      <input id="mStreet" placeholder="Street (e.g. 1014 Kirkwood Ave)">
+      <div class="mrow">
+        <input id="mCity" placeholder="City" value="Nashville">
+        <input id="mState" placeholder="ST" value="TN" maxlength="2">
+        <input id="mZip" placeholder="ZIP" inputmode="numeric">
+      </div>
+      <input id="mJob" placeholder="Job type (optional)">
+      <button id="mAdd" class="btn primary">Add stop</button>
+    </div>
+  </section>
+
+  <!-- Route status -->
+  <div id="routeStatus" class="status-line"></div>
+
+  <!-- Stop list -->
+  <section id="listCard" class="card">
+    <div class="list-head">
+      <h2>Stops <span id="stopCount"></span></h2>
+      <button id="mapToggle" class="btn ghost">🗺 Map</button>
+    </div>
+    <div id="mapWrap" hidden><div id="map"></div></div>
+    <ul id="stopList"></ul>
+    <p id="emptyHint">No stops yet — add screenshots of your schedule or search an address above.</p>
+  </section>
+</main>
+
+<!-- Bottom action bar -->
+<nav id="actionBar">
+  <button id="optimizeBtn" class="btn primary big">⚡<span>Optimize</span></button>
+  <button id="mapsBtn" class="btn big">🗺️<span>Maps</span></button>
+  <button id="shareBtn" class="btn big">🔗<span>Share</span></button>
+</nav>
+
+<!-- OCR progress overlay -->
+<div id="ocrOverlay" hidden>
+  <div class="ocr-box">
+    <h3>Reading screenshots…</h3>
+    <div class="ocr-bar"><div id="ocrBarFill"></div></div>
+    <p id="ocrStatus"></p>
+  </div>
+</div>
+
+<!-- Settings sheet -->
+<div id="settingsSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>Settings</h2><button id="settingsClose" class="icon-btn">✕</button></div>
+    <label class="set-row"><span>Default start address <small>(blank = GPS)</small></span>
+      <input id="setStart" placeholder="e.g. 123 Main St, Nashville, TN"></label>
+    <label class="set-row check"><span>Avoid tolls</span><input id="setTolls" type="checkbox"></label>
+    <label class="set-row check"><span>Avoid highways</span><input id="setHwy" type="checkbox"></label>
+    <label class="set-row check"><span>Return to start at end</span><input id="setReturn" type="checkbox"></label>
+    <label class="set-row check"><span>Save route history</span><input id="setHistory" type="checkbox"></label>
+    <button id="clearRoute" class="btn danger">🗑 Clear current route</button>
+    <p class="fine">RouteRunner runs entirely on your phone. No account, no server, no AI.</p>
+  </div>
+</div>
+
+<!-- Leg chooser -->
+<div id="legSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>Open in Google Maps</h2><button id="legClose" class="icon-btn">✕</button></div>
+    <p class="fine">Google Maps takes up to 10 stops per leg. Open each leg in order.</p>
+    <div id="legList"></div>
+  </div>
+</div>
+
+<div id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<script src="core.js"></script>
+<script src="ocr.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+{"background_color":"#0b0e1a","description":"Screenshot-to-route planner: OCR your schedule, optimize stops, navigate.","display":"standalone","icons":[{"sizes":"192x192","src":"icon-192.png","type":"image/png"},{"sizes":"512x512","src":"icon-512.png","type":"image/png"}],"name":"RouteRunner","short_name":"RouteRunner","start_url":"./index.html","theme_color":"#0b0e1a"}
