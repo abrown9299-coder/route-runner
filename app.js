@@ -16,10 +16,14 @@
     lastEstimate: null,  // {beforeMin, afterMin, savedMin, source} post-optimization
     geocoding: false,    // background geocode in flight
     geocodeStatus: '',
+    warnSuppressed: false, // "don't warn me again" for at-risk windows, per route
+    lastSchedule: null,  // {at, arrivals: {stopId: arrivalMin}} from last optimize
+    checkedIn: null,     // {stopId, startedAt} — currently being serviced (v1.9)
   };
   const settings = {
     defaultStart: '', avoidTolls: false, avoidHwy: false,
     returnToStart: false, saveHistory: false,
+    serviceTimes: { default: 45, byJobType: {}, known: [] },
   };
 
   /* ---------- persistence ---------- */
@@ -30,6 +34,8 @@
         optimized: state.optimized, matrixSource: state.matrixSource,
         preEstimateMin: state.preEstimateMin, lastEstimate: state.lastEstimate,
         preDriveMin: state.preDriveMin, preDriveSource: state.preDriveSource,
+        warnSuppressed: state.warnSuppressed, lastSchedule: state.lastSchedule,
+        checkedIn: state.checkedIn,
       }));
       localStorage.setItem(LS_SET, JSON.stringify(settings));
     } catch (e) { /* storage full/blocked — app still works for the session */ }
@@ -56,8 +62,34 @@
         state.preDriveMin = (r.preDriveMin != null) ? r.preDriveMin : null;
         state.preDriveSource = r.preDriveSource || null;
         state.lastEstimate = r.lastEstimate || null;
+        state.warnSuppressed = !!r.warnSuppressed;
+        state.checkedIn = null;
+        if (r.checkedIn && r.checkedIn.stopId != null && r.checkedIn.startedAt) {
+          const cs = state.stops.find((x) => x.id === r.checkedIn.stopId);
+          if (cs && !cs.done &&
+              RouteCore.remainingServiceMin(serviceMinFor(cs), r.checkedIn.startedAt, Date.now()) > 0) {
+            state.checkedIn = { stopId: r.checkedIn.stopId, startedAt: r.checkedIn.startedAt };
+          }
+        }
+        if (r.checkedIn && !state.checkedIn) save(); // persist dropping a stale check-in
+        state.lastSchedule = r.lastSchedule || null;
       }
     } catch (e) {}
+    /* sanitize service-time settings (forward-migration safe) */
+    try {
+      const st = settings.serviceTimes || {};
+      settings.serviceTimes = {
+        default: (typeof st.default === 'number' && st.default >= 15 && st.default <= 480) ? st.default : 45,
+        byJobType: (st.byJobType && typeof st.byJobType === 'object') ? st.byJobType : {},
+        known: Array.isArray(st.known) ? st.known.filter((x) => typeof x === 'string').slice(0, 60) : [],
+      };
+      Object.keys(settings.serviceTimes.byJobType).forEach((k) => {
+        const v = settings.serviceTimes.byJobType[k];
+        if (typeof v !== 'number' || v < 15 || v > 480) delete settings.serviceTimes.byJobType[k];
+      });
+    } catch (e) {
+      settings.serviceTimes = { default: 45, byJobType: {}, known: [] };
+    }
     if (settings.defaultStart && state.origin.type === 'gps' && !state.origin.lat) {
       state.origin = { type: 'address', label: settings.defaultStart, lat: null, lng: null };
     }
@@ -73,6 +105,49 @@
     if (a) return a;
     if (s.lat != null && s.lng != null) return s.lat.toFixed(5) + ',' + s.lng.toFixed(5);
     return 'Unknown address';
+  }
+
+  /* ---------- service times (v1.9) ---------- */
+  const SVC_MIN = 15, SVC_MAX = 180, SVC_STEP = 5, SVC_DEFAULT = 45;
+  function serviceMinFor(s) {
+    const st = settings.serviceTimes;
+    const jt = s && s.jobType ? String(s.jobType) : '';
+    if (jt && st.byJobType[jt] != null) return st.byJobType[jt];
+    return st.default || SVC_DEFAULT;
+  }
+  /* Learn job types over time so each can get its own service duration. */
+  function collectJobTypes(stops) {
+    const st = settings.serviceTimes;
+    let changed = false;
+    (stops || []).forEach((s) => {
+      const jt = s && s.jobType ? String(s.jobType).trim() : '';
+      if (jt && st.known.indexOf(jt) === -1 && st.known.length < 60) {
+        st.known.push(jt); changed = true;
+      }
+    });
+    return changed;
+  }
+  function nowMinutes() {
+    const n = new Date();
+    return n.getHours() * 60 + n.getMinutes();
+  }
+  /* Departure for schedule math: right now, unless checked into a stop — then
+   * departures begin when the remaining service time runs out. */
+  function departMinForOpt() {
+    const n = new Date();
+    let depart = n.getHours() * 60 + n.getMinutes() + n.getSeconds() / 60;
+    const ci = state.checkedIn;
+    if (ci) {
+      const s = state.stops.find((x) => x.id === ci.stopId);
+      if (s && !s.done) {
+        depart += RouteCore.remainingServiceMin(serviceMinFor(s), ci.startedAt, Date.now());
+      }
+    }
+    return depart;
+  }
+  function fmtWindow(s) {
+    if (s.twStart == null || s.twEnd == null) return '';
+    return RouteCore.formatClock(s.twStart) + '–' + RouteCore.formatClock(s.twEnd);
   }
   function markDirty(msg) {
     state.optimized = false; state.matrixSource = null;
@@ -155,11 +230,22 @@
           (s.jobType ? '<span class="chip">' + esc(s.jobType) + '</span>' : '') +
           (s.isFirst ? '<span class="chip first">🚩 first stop</span>' : '') +
           (s.isLast ? '<span class="chip last">🏁 last stop</span>' : '') +
+          (s.confirmed && s.twStart != null && s.twEnd != null
+            ? '<span class="chip confirm">✓ ' + esc(fmtWindow(s)) + '</span>' : '') +
+          (!s.done && state.optimized && state.lastSchedule && state.lastSchedule.arrivals &&
+           state.lastSchedule.arrivals[s.id] != null
+            ? '<span class="chip eta">→ arr ~' + esc(RouteCore.formatClock(Math.round(state.lastSchedule.arrivals[s.id]))) + '</span>' : '') +
           (needsPin ? '<span class="chip warn">📍 no location — tap to drop pin</span>' : '') +
           (!needsPin && s.approx ? '<span class="chip">≈ area</span>' : '') +
           (s.note ? '<span class="chip">📝 ' + esc(s.note) + '</span>' : '') +
+          (!s.done
+            ? (state.checkedIn && state.checkedIn.stopId === s.id
+              ? '<button class="pill checkin on" data-act="checkin" title="End the service timer">⏳ In service — tap to end</button>'
+              : '<button class="pill checkin" data-act="checkin" title="Start the service timer — departures wait until it finishes">▶ Check in</button>')
+            : '') +
         '</div></div>' +
         '<div class="acts">' +
+          '<button class="confirm-btn' + (s.confirmed ? ' on' : '') + '" data-act="confirm" title="Confirm appointment window">⏰</button>' +
           '<button class="check-btn' + (s.done ? ' on' : '') + '" data-act="check" title="Mark done">✓</button>' +
           '<button data-act="first" title="Set as first stop">🚩</button>' +
           '<button data-act="last" title="Set as last stop">🏁</button>' +
@@ -220,7 +306,30 @@
       return;
     }
     const act = btn.dataset.act;
-    if (act === 'check') { s.done = !s.done; save(); render(); }
+    if (act === 'check') {
+      s.done = !s.done;
+      if (s.done && state.checkedIn && state.checkedIn.stopId === s.id) {
+        state.checkedIn = null; // service finished with the stop
+      }
+      save(); render();
+      if (s.done) maybeAutoReopt('done'); // fresh times + re-route around confirmed windows
+    }
+    else if (act === 'confirm') {
+      openWindowPopup(s); // new or edit: popup offers confirm/update/remove
+    }
+    else if (act === 'checkin') {
+      const ci = state.checkedIn;
+      if (ci && ci.stopId === s.id) {
+        state.checkedIn = null;
+        toast('Service timer stopped');
+      } else {
+        // one active service at a time: checking in here ends any other
+        state.checkedIn = { stopId: s.id, startedAt: Date.now() };
+        toast('⏳ Checked in — ' + serviceMinFor(s) + ' min service timer running');
+      }
+      save(); render();
+      maybeAutoReopt('checkin'); // departure moved: re-route around it
+    }
     else if (act === 'first') {
       state.stops.forEach((x) => { if (x !== s) x.isFirst = false; });
       s.isFirst = !s.isFirst;
@@ -238,6 +347,7 @@
       if (n !== null) { s.note = n.trim(); save(); render(); }
     }
     else if (act === 'del') {
+      if (state.checkedIn && state.checkedIn.stopId === s.id) state.checkedIn = null;
       const idx = state.stops.indexOf(s);
       state.stops.splice(idx, 1);
       markDirty();
@@ -257,6 +367,102 @@
       markDirty('Order updated — re-optimize to re-route');
     },
   });
+
+  /* ---------- confirmed-stop time window popup (v1.9) ---------- */
+  let winStopId = null;
+  function minToInput(min) {
+    const m = ((Math.round(min) % 1440) + 1440) % 1440;
+    const h = Math.floor(m / 60), mm = m % 60;
+    return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm;
+  }
+  function inputToMin(v) {
+    const m = String(v || '').match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const h = Number(m[1]), mm = Number(m[2]);
+    if (h > 23 || mm > 59) return null;
+    return h * 60 + mm;
+  }
+  function plannedArrivalMin(s) {
+    if (s.apptMin != null) return s.apptMin; // the appointment's original time
+    const arr = state.lastSchedule && state.lastSchedule.arrivals;
+    if (arr && arr[s.id] != null) return Math.round(arr[s.id]);
+    return null;
+  }
+  function openWindowPopup(s) {
+    winStopId = s.id;
+    $('winAddr').textContent = stopLabel(s);
+    if (s.confirmed && s.twStart != null && s.twEnd != null) {
+      // editing an existing window: start from its current times
+      $('winStart').value = minToInput(s.twStart);
+      $('winEnd').value = minToInput(s.twEnd);
+      $('winOk').textContent = '✓ Update window';
+      $('winRemove').hidden = false;
+    } else {
+      let start = plannedArrivalMin(s);
+      if (start == null) {
+        const n = new Date();
+        start = Math.ceil((n.getHours() * 60 + n.getMinutes() + 1) / 15) * 15 % 1440;
+      }
+      $('winStart').value = minToInput(start);
+      $('winEnd').value = minToInput(start + 120); // auto: 2-hour window
+      $('winOk').textContent = '✓ Confirm window';
+      $('winRemove').hidden = true;
+    }
+    $('winSheet').hidden = false;
+  }
+  function closeWindowPopup() {
+    winStopId = null;
+    $('winSheet').hidden = true;
+  }
+  $('winCancel').onclick = closeWindowPopup;
+  $('winRemove').onclick = () => {
+    const s = state.stops.find((x) => x.id === winStopId);
+    if (s) {
+      s.confirmed = false; s.twStart = null; s.twEnd = null;
+      save(); render();
+      toast('Window removed — stop can be scheduled anytime');
+      maybeAutoReopt('window');
+    }
+    closeWindowPopup();
+  };
+  $('winOk').onclick = () => {
+    const s = state.stops.find((x) => x.id === winStopId);
+    if (!s) { closeWindowPopup(); return; }
+    const st = inputToMin($('winStart').value), en = inputToMin($('winEnd').value);
+    if (st == null || en == null) { toast('Pick a start and end time'); return; }
+    if (en <= st) { toast('End time must be after start time'); return; }
+    const was = s.confirmed;
+    s.confirmed = true; s.twStart = st; s.twEnd = en;
+    closeWindowPopup();
+    save(); render();
+    toast((was ? '✓ Window updated ' : '✓ Window confirmed ') +
+      RouteCore.formatClock(st) + '–' + RouteCore.formatClock(en));
+    maybeAutoReopt('window'); // re-route now around the new constraint
+  };
+
+  /* ---------- at-risk warning popup (v1.9) ---------- */
+  function showRiskWarning(risks) {
+    if (!risks.length || state.warnSuppressed) return;
+    const ul = $('riskList');
+    ul.innerHTML = '';
+    risks.forEach((r) => {
+      const li = document.createElement('li');
+      li.innerHTML = '<div class="addr">' + esc(stopLabel(r.stop)) + '</div>' +
+        '<div class="meta">arr ~' + esc(RouteCore.formatClock(r.arrivalMin)) +
+        ' · window ' + esc(RouteCore.formatClock(r.winStart)) + '–' + esc(RouteCore.formatClock(r.winEnd)) +
+        ' <span class="chip warn">may miss</span></div>';
+      ul.appendChild(li);
+    });
+    $('riskMute').checked = false;
+    $('riskSheet').hidden = false;
+  }
+  $('riskOk').onclick = () => {
+    if ($('riskMute').checked) {
+      state.warnSuppressed = true; // resets on new route / route reset
+      save();
+    }
+    $('riskSheet').hidden = true;
+  };
 
   /* ---------- add: search ---------- */
   let searchTimer = null;
@@ -287,7 +493,7 @@
             id: uid(), street: [p.name, p.street].filter(Boolean).join(' ') || label,
             city: p.city || '', state: p.state || '', zip: p.postcode || '',
             jobType: '', note: '', lat, lng, geocodeSource: 'search',
-            done: false, isLast: false, isFirst: false, source: 'search',
+            done: false, isLast: false, isFirst: false, confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
           }]);
           $('searchInput').value = '';
           list.hidden = true;
@@ -313,11 +519,11 @@
     const s = {
       id: uid(), street, city: $('mCity').value.trim(), state: $('mState').value.trim(),
       zip: $('mZip').value.trim(), jobType: $('mJob').value.trim(), note: '',
-      lat: null, lng: null, geocodeSource: null, done: false, isLast: false, isFirst: false, source: 'manual',
+      lat: null, lng: null, geocodeSource: null, done: false, isLast: false, isFirst: false, confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'manual',
     };
-    addStops([s]);
+    const added = addStops([s]);
     $('mStreet').value = ''; $('mZip').value = ''; $('mJob').value = '';
-    toast('Stop added — locating it now');
+    toast(added > 0 ? 'Stop added — locating it now' : 'That address is already on your route');
   };
 
   /* ---------- add: screenshots / OCR ---------- */
@@ -340,7 +546,7 @@
           parsed.forEach((p) => all.push({
             id: uid(), street: p.street, city: p.city, state: p.state, zip: p.zip,
             jobType: p.jobType || '', note: '', lat: null, lng: null, geocodeSource: null,
-            done: false, isLast: false, isFirst: false, source: 'ocr',
+            done: false, isLast: false, isFirst: false, confirmed: false, twStart: null, twEnd: null, apptMin: (p.apptMin != null ? p.apptMin : null), source: 'ocr',
           }));
         } catch (err) { console.warn('OCR failed for one image', err); }
       }
@@ -363,19 +569,21 @@
   });
 
   function addStops(arr) {
-    if (!arr.length) return;
+    if (!arr.length) return 0;
     if (state.stops.length + arr.length > 20) {
       toast('20-stop ceiling reached — remove a stop first');
       arr = arr.slice(0, 20 - state.stops.length);
-      if (!arr.length) return;
+      if (!arr.length) return 0;
     }
     const before = state.stops.length;
     const merged = RouteCore.dedupeStops(state.stops.concat(arr));
     state.stops = merged.stops;
     const added = state.stops.length - before;
+    if (collectJobTypes(state.stops)) save(); // learn job types for service-time settings
     markDirty('Added ' + added + ' stop' + (added === 1 ? '' : 's') +
       (merged.removed ? ', ' + merged.removed + ' duplicate' + (merged.removed === 1 ? '' : 's') + ' skipped' : ''));
     geocodeInBackground();
+    return added;
   }
 
   /* ---------- geocoding ---------- */
@@ -583,8 +791,15 @@
   }
 
   /* ---------- optimize ---------- */
-  $('optimizeBtn').onclick = async () => {
-    if (!state.stops.length) { toast('Add some stops first'); return; }
+  let optInFlight = false;
+  $('optimizeBtn').onclick = () => doOptimize(false);
+
+  /* Optimize the route. auto=true when the automatic engine fires it
+   * (stop done / idle reopen / window confirmed): same math, quieter toasts. */
+  async function doOptimize(auto) {
+    if (!state.stops.length) { if (!auto) toast('Add some stops first'); return; }
+    if (optInFlight) return;
+    optInFlight = true;
     const btn = $('optimizeBtn');
     btn.disabled = true;
     const setStatus = (t) => { $('routeStatus').textContent = t; $('routeStatus').className = 'status-line warn'; };
@@ -594,24 +809,49 @@
         try { await geocodeInflight; } catch (e) {}
       }
       await ensureGeocoded(setStatus);
-      const located = state.stops.filter((s) => s.lat != null);
-      const unlocated = state.stops.filter((s) => s.lat == null);
-      if (!located.length) { toast('Could not locate any addresses'); return; }
-
-      const points = [{ lat: state.origin.lat, lng: state.origin.lng, _stopId: null }]
-        .concat(located.map((s) => ({ lat: s.lat, lng: s.lng, _stopId: s.id })));
+      // Done stops stay visible for history but leave the active route.
+      const active = state.stops.filter((s) => !s.done);
+      const doneStops = state.stops.filter((s) => s.done);
+      const located = active.filter((s) => s.lat != null);
+      const unlocated = active.filter((s) => s.lat == null);
+      if (!located.length) {
+        toast(active.length ? 'Could not locate any addresses' : 'All stops done — nice work!');
+        return;
+      }
+      // checked-in stop: you're AT it — finish service there, then depart from
+      // it. It becomes the effective origin, never a future destination.
+      const ci = state.checkedIn;
+      const ciStop = ci ? located.find((s) => s.id === ci.stopId && !s.done) : null;
+      const destStops = ciStop ? located.filter((s) => s.id !== ciStop.id) : located;
+      const points = [{
+        lat: ciStop ? ciStop.lat : state.origin.lat,
+        lng: ciStop ? ciStop.lng : state.origin.lng,
+        _stopId: null,
+      }].concat(destStops.map((s) => ({ lat: s.lat, lng: s.lng, _stopId: s.id })));
       // origin may lack coords (GPS denied) — fall back to first stop as start
       let startIdx = 0;
       if (points[0].lat == null) { points.shift(); startIdx = -1; }
-      const lastStop = state.stops.find((s) => s.isLast && s.lat != null);
+      const lastStop = active.find((s) => s.isLast && s.lat != null);
       const lastIdx = lastStop ? points.findIndex((p) => p._stopId === lastStop.id) : null;
-      const firstStop = state.stops.find((s) => s.isFirst && s.lat != null);
+      const firstStop = active.find((s) => s.isFirst && s.lat != null);
       const firstIdx = firstStop ? points.findIndex((p) => p._stopId === firstStop.id) : null;
 
       setStatus('Optimizing route…');
       const beforeOrder = points.map((_, i) => i); // current (import) order
-      const { order, source, matrix } = await RouteCore.optimizeRouteAsync(points, {
+      const byStopId = Object.fromEntries(state.stops.map((s) => [s.id, s]));
+      // time windows: confirmed stops only; arrival must land in [start, end-30m]
+      const windows = points.map((p) => {
+        const s = p._stopId ? byStopId[p._stopId] : null;
+        return (s && s.confirmed && s.twStart != null && s.twEnd != null)
+          ? { start: s.twStart, end: s.twEnd } : null;
+      });
+      const serviceMin = points.map((p) => {
+        const s = p._stopId ? byStopId[p._stopId] : null;
+        return s ? serviceMinFor(s) : 0;
+      });
+      const { order, source, matrix, schedule } = await RouteCore.optimizeRouteAsync(points, {
         startIdx: Math.max(0, startIdx), firstIdx, lastIdx, fetchFn: fetch.bind(window),
+        windows, serviceMin, departMin: departMinForOpt(), bufferMin: 30,
       });
       // before/after from the SAME matrix: apples-to-apples savings
       const beforeMin = RouteCore.routeMinutesForOrder(matrix, beforeOrder, source);
@@ -623,25 +863,121 @@
         source: source,
       };
       state.preEstimateMin = 0;
-      const byId = Object.fromEntries(state.stops.map((s) => [s.id, s]));
       const ordered = order
         .map((pi) => points[pi]._stopId)
-        .filter((id) => id && byId[id])
-        .map((id) => byId[id]);
-      state.stops = ordered.concat(unlocated); // unlocated ride at the end
+        .filter((id) => id && byStopId[id])
+        .map((id) => byStopId[id]);
+      // the checked-in stop stays visible at the front (you're there now); it
+      // was the effective origin, not a destination, so re-attach it here.
+      // Done stops sink to the bottom — visible history, out of the route.
+      state.stops = (ciStop ? [ciStop] : []).concat(ordered).concat(unlocated).concat(doneStops);
       state.optimized = true;
+      lastOptAt = Date.now(); // manual optimizes count for the auto-reopt anti-spam gate
       state.matrixSource = source;
+      // remember per-stop projected arrivals (popup defaults, at-risk checks)
+      let risks = [];
+      if (schedule) {
+        const arrivals = {};
+        schedule.legs.forEach((leg) => {
+          const pid = points[leg.point] && points[leg.point]._stopId;
+          if (pid) arrivals[pid] = leg.arrivalMin;
+        });
+        state.lastSchedule = { at: Date.now(), arrivals };
+        risks = schedule.violations
+          .map((v) => {
+            const pid = points[v.point] && points[v.point]._stopId;
+            const stop = pid ? byStopId[pid] : null;
+            return stop ? { stop, arrivalMin: v.arrivalMin,
+                            winStart: v.winStart, winEnd: v.winEnd } : null;
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.winStart - b.winStart); // earliest window first
+      } else {
+        state.lastSchedule = null;
+      }
       save(); render();
       if (settings.saveHistory) saveHistory(source);
-      toast(source === 'osrm' ? '⚡ Optimized by drive time' : '⚡ Optimized (straight-line — offline mode)');
+      if (risks.length) {
+        toast(auto ? '⚠ Auto re-optimized — ' + risks.length + ' confirmed stop' +
+          (risks.length === 1 ? '' : 's') + ' may miss ' +
+          (risks.length === 1 ? 'its' : 'their') + ' window'
+          : '⚠ Optimized — ' + risks.length + ' confirmed stop' +
+          (risks.length === 1 ? '' : 's') + ' may miss ' +
+          (risks.length === 1 ? 'its' : 'their') + ' window');
+        showRiskWarning(risks);
+      } else if (windows.some(Boolean)) {
+        toast(auto ? '⚡ Auto re-optimized — all confirmed windows on track'
+                   : '⚡ Optimized — all confirmed windows on track');
+      } else {
+        toast(source === 'osrm' ? '⚡ Optimized by drive time' : '⚡ Optimized (straight-line — offline mode)');
+      }
     } catch (e) {
       console.warn(e);
-      toast('Optimization hit a snag — try again');
+      if (!auto) toast('Optimization hit a snag — try again');
       render();
     } finally {
       btn.disabled = false;
+      optInFlight = false;
     }
-  };
+  }
+
+  /* ---------- automatic re-optimization engine (v1.9) ----------
+   * Fires when: a stop is marked done, a window is confirmed/changed, the
+   * app is opened/reopened after 15+ minutes, or the user interacts after
+   * 15+ minutes idle. Pulls fresh drive times and re-optimizes around
+   * confirmed windows — automatic and seamless. */
+  let autoTimer = null, autoInFlight = false, lastAutoOptAt = 0;
+  let lastOptAt = 0; // last optimize of any kind (manual or auto) — anti-spam baseline
+  let lastInteractionAt = Date.now(), hiddenAt = 0;
+  const AUTO_IDLE_MS = 15 * 60 * 1000;
+  function confirmedWindowed() {
+    return state.stops.filter((s) => s.confirmed && s.twStart != null && s.twEnd != null &&
+                                     s.lat != null && s.lng != null);
+  }
+  function maybeAutoReopt(reason, attempt, idleProven) {
+    if (!confirmedWindowed().length) return;      // nothing to protect
+    if (autoInFlight || optInFlight || state.geocoding) {
+      // boot/reopen must not silently die on geocoding: retry a few times
+      if ((reason === 'boot' || reason === 'visible') && (attempt || 0) < 6) {
+        setTimeout(() => maybeAutoReopt(reason, (attempt || 0) + 1), 5000);
+      }
+      return;
+    }
+    if (!$('winSheet').hidden || !$('riskSheet').hidden) return; // user mid-flow
+    const now = Date.now();
+    const immediate = (reason === 'done' || reason === 'window' || reason === 'checkin');
+    const reopen = (reason === 'boot' || reason === 'visible');
+    // true idle gate: 15+ minutes since the last real interaction…
+    if (!immediate && !reopen && !idleProven && now - lastInteractionAt < AUTO_IDLE_MS) return;
+    // …and 15+ minutes since the last optimize of any kind (anti-spam)…
+    if (!immediate && !reopen && now - lastOptAt < AUTO_IDLE_MS) return;
+    // …but reopening ALWAYS refreshes, even if the last optimize was recent
+    if (autoTimer) clearTimeout(autoTimer);
+    autoTimer = setTimeout(() => {
+      autoTimer = null;
+      autoInFlight = true;
+      doOptimize(true).catch(() => {}).finally(() => {
+        autoInFlight = false;
+        lastAutoOptAt = Date.now();
+      });
+    }, immediate ? 1500 : 2500);
+  }
+  function noteInteraction() {
+    const now = Date.now();
+    const idleFor = now - lastInteractionAt;
+    lastInteractionAt = now;
+    // came back and touched the app after 15+ min idle: times are stale.
+    // idleProven=true because we measured the gap before updating the stamp.
+    if (idleFor >= AUTO_IDLE_MS) maybeAutoReopt('idle', 0, true);
+  }
+  document.addEventListener('pointerdown', noteInteraction, { passive: true });
+  document.addEventListener('keydown', noteInteraction);
+  // the app sitting open but untouched for 15+ min: refresh in the background
+  setInterval(() => {
+    if (!document.hidden && Date.now() - lastInteractionAt >= AUTO_IDLE_MS) {
+      maybeAutoReopt('idle');
+    }
+  }, 60000);
 
   function saveHistory(source) {
     try {
@@ -695,6 +1031,7 @@
       stops: state.stops.map((s) => ({
         street: s.street, city: s.city, state: s.state, zip: s.zip,
         jobType: s.jobType, note: s.note, lat: s.lat, lng: s.lng, isLast: s.isLast, isFirst: s.isFirst,
+        confirmed: !!s.confirmed, twStart: s.twStart, twEnd: s.twEnd, apptMin: s.apptMin,
       })),
     };
     const url = location.href.split('#')[0] + RouteCore.encodeShare(payload);
@@ -711,9 +1048,14 @@
     if (!data || !Array.isArray(data.stops)) return false;
     state.stops = data.stops.map((s) => Object.assign({
       id: uid(), done: false, isLast: !!s.isLast, isFirst: !!s.isFirst, source: 'shared', geocodeSource: null,
+      confirmed: !!s.confirmed, twStart: (s.twStart != null ? s.twStart : null),
+      twEnd: (s.twEnd != null ? s.twEnd : null), apptMin: (s.apptMin != null ? s.apptMin : null),
     }, s));
     if (data.origin) state.origin = data.origin;
     if (data.settings) Object.assign(settings, data.settings);
+    if (collectJobTypes(state.stops)) save();
+    state.warnSuppressed = false; // a shared route is a new route: warnings back on
+    state.checkedIn = null; // service timer doesn't survive a shared route
     state.optimized = false;
     history.replaceState(null, '', location.pathname + location.search);
     save(); render();
@@ -840,6 +1182,9 @@
     state.geocoding = false;
     state.geocodeStatus = '';
     state.pinModeStopId = null;
+    state.warnSuppressed = false; // new route: at-risk warnings come back
+    state.checkedIn = null;
+    state.lastSchedule = null;
     $('mapWrap').hidden = true;
     $('mapToggle').textContent = '🗺 Map';
     save(); render();
@@ -878,6 +1223,7 @@
     $('setHwy').checked = settings.avoidHwy;
     $('setReturn').checked = settings.returnToStart;
     $('setHistory').checked = settings.saveHistory;
+    renderServiceTimes();
     $('settingsSheet').hidden = false;
   };
   $('settingsClose').onclick = () => {
@@ -894,6 +1240,72 @@
     render();
   };
   $('clearRoute').onclick = () => resetRoute(true);
+
+  /* ---------- service times (v1.9): per-job-type durations ----------
+   * Job types are learned from imports over time. Each gets a dropdown
+   * (15, 20, 25, … minutes); unadjusted types use the default (45).
+   * Nothing resets on its own — only the explicit reset controls. */
+  function svcOptions(selected) {
+    let html = '';
+    for (let m = SVC_MIN; m <= SVC_MAX; m += SVC_STEP) {
+      html += '<option value="' + m + '"' + (m === selected ? ' selected' : '') + '>' + m + ' min</option>';
+    }
+    return html;
+  }
+  function renderServiceTimes() {
+    const st = settings.serviceTimes;
+    $('setSvcDefault').innerHTML = svcOptions(st.default);
+    const box = $('svcRows');
+    box.innerHTML = '';
+    const known = st.known.slice().sort();
+    if (!known.length) {
+      box.innerHTML = '<p class="fine">No job types yet — they appear here as you import routes.</p>';
+    }
+    known.forEach((jt) => {
+      const row = document.createElement('div');
+      row.className = 'svc-row';
+      const cur = st.byJobType[jt] != null ? st.byJobType[jt] : st.default;
+      const isCustom = st.byJobType[jt] != null;
+      row.innerHTML =
+        '<span class="svc-name">' + esc(jt) + (isCustom ? '' : ' <small>(default)</small>') + '</span>' +
+        '<select data-jt="' + esc(jt) + '">' + svcOptions(cur) + '</select>' +
+        (isCustom ? '<button class="link" data-reset="' + esc(jt) + '">reset</button>' : '');
+      box.appendChild(row);
+    });
+  }
+  $('svcRows').addEventListener('change', (e) => {
+    const sel = e.target.closest('select[data-jt]');
+    if (!sel) return;
+    const v = Number(sel.value);
+    if (v >= SVC_MIN && v <= SVC_MAX) {
+      settings.serviceTimes.byJobType[sel.dataset.jt] = v;
+      save(); renderServiceTimes();
+      toast('Service time saved');
+      maybeAutoReopt('window');
+    }
+  });
+  $('svcRows').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-reset]');
+    if (!btn) return;
+    delete settings.serviceTimes.byJobType[btn.dataset.reset];
+    save(); renderServiceTimes();
+    toast('Reset to default');
+  });
+  $('setSvcDefault').addEventListener('change', (e) => {
+    const v = Number(e.target.value);
+    if (v >= SVC_MIN && v <= SVC_MAX) {
+      settings.serviceTimes.default = v;
+      save(); renderServiceTimes();
+      toast('Default service time: ' + v + ' min');
+      maybeAutoReopt('window');
+    }
+  });
+  $('svcResetAll').onclick = () => {
+    if (!confirm('Reset every job type back to the default service time?')) return;
+    settings.serviceTimes.byJobType = {};
+    save(); renderServiceTimes();
+    toast('All service times reset to default');
+  };
 
   /* ---------- auto-update: newest version on every open, place restored ----------
    * version.json (never cached) is compared against the APP_VERSION stamped
@@ -991,8 +1403,8 @@
     ensureDevicePos().then(adoptDevicePos);
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) saveUIState();
-    else checkForUpdate();
+    if (document.hidden) { hiddenAt = Date.now(); saveUIState(); }
+    else { checkForUpdate(); maybeAutoReopt('visible'); } // reopened: fresh times + re-route
   });
   window.addEventListener('pagehide', saveUIState);
   if ('serviceWorker' in navigator) {
@@ -1003,5 +1415,8 @@
   // A restored/share-booted route with stops: verify the real drive time too
   // (markDirty only fires on edits, not on boot).
   if (state.stops.length && !state.optimized) schedulePreDriveTime();
+  // Closed and reopened: fresh transport times + automatic re-optimization
+  // around confirmed windows (settled after GPS/geocode get a beat).
+  setTimeout(() => maybeAutoReopt('boot'), 4000);
   window.__rrBooted = true; // boot watchdog in index.html stands down
 })();

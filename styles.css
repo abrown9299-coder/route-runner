@@ -88,6 +88,7 @@ main { padding: 12px 12px 0; max-width: 640px; margin: 0 auto; }
   border: 1px solid var(--line); background: var(--card2); color: var(--text);
 }
 .mrow { display: flex; gap: 8px; }
+.mrow input { min-width: 0; } /* inputs refuse to shrink below intrinsic width otherwise */
 .mrow #mCity { flex: 2; } .mrow #mState { flex: 0 0 56px; } .mrow #mZip { flex: 1; }
 
 /* Buttons */
@@ -150,6 +151,42 @@ main { padding: 12px 12px 0; max-width: 640px; margin: 0 auto; }
 .stop.done .num { background: var(--green); }
 .check-btn { font-size: 24px !important; }
 .check-btn.on { color: var(--green); }
+.confirm-btn.on { color: #fbbf24; }
+.chip.confirm { background: #45300f; color: #fde68a; border: 1px solid #f59e0b; }
+.chip.eta { background: #0f2f45; color: #a5d8ff; }
+li.stop.confirmed { border-left: 3px solid #f59e0b; }
+.pill {
+  background: none; border: 1px solid var(--line); color: var(--dim);
+  border-radius: 20px; padding: 4px 10px; font-size: 11px; cursor: pointer;
+}
+.pill.checkin.on { border-color: #22c55e; color: #86efac; background: #052e16; }
+
+/* time-window popup */
+.win-times { display: flex; gap: 12px; margin: 12px 0 16px; }
+.win-times label { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--dim); }
+.win-times input[type="time"] {
+  font-size: 17px; padding: 10px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--card2); color: var(--text);
+}
+#winAddr { font-size: 14px; font-weight: 600; color: var(--text); margin: 0 0 4px; }
+
+/* at-risk warning */
+.risk-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.risk-list li { background: var(--card2); border-radius: 10px; padding: 10px 12px; }
+.risk-list .addr { font-size: 14px; font-weight: 600; }
+.risk-list .meta { font-size: 12px; color: var(--dim); margin-top: 4px; }
+
+/* service-time settings */
+.set-sec { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; }
+.set-sec h3 { margin: 0 0 8px; font-size: 15px; }
+.svc-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.svc-row .svc-name { flex: 1; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.svc-row .svc-name small { color: var(--dim); }
+.svc-row select, .set-row select {
+  font-size: 14px; padding: 8px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--card2); color: var(--text);
+}
+button.link { background: none; border: none; color: var(--accent); font-size: 13px; cursor: pointer; padding: 8px; }
 #emptyHint { color: var(--dim); font-size: 14px; text-align: center; padding: 18px 8px; margin: 0; }
 
 /* Map */
@@ -182,11 +219,11 @@ main { padding: 12px 12px 0; max-width: 640px; margin: 0 auto; }
 }
 
 /* Overlays / sheets */
-#ocrOverlay, #settingsSheet, #legSheet {
+#ocrOverlay, #settingsSheet, #legSheet, #winSheet, #riskSheet {
   position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.6);
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
-#ocrOverlay[hidden], #settingsSheet[hidden], #legSheet[hidden] { display: none; }
+#ocrOverlay[hidden], #settingsSheet[hidden], #legSheet[hidden], #winSheet[hidden], #riskSheet[hidden] { display: none; }
 .ocr-box, .sheet {
   background: var(--card); border: 1px solid var(--line); border-radius: 16px;
   padding: 20px; width: 100%; max-width: 420px; max-height: 85vh; overflow-y: auto;

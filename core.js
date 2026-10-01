@@ -10,6 +10,12 @@
  *   haversineMi(a, b)           {lat,lng}x2 -> miles
  *   buildHaversineMatrix(points) -> n x n mile matrix
  *   optimizeOrder(matrix, {start, first, last}) -> index order (NN + 2-opt; `first` pinned right after start, `last` pinned at end)
+ *   optimizeOrder opts (v1.9): {windows, durMin, source, departMin, serviceMin, bufferMin}
+ *     windows[i] = null | {start, end} arrival window in minutes-from-midnight;
+ *     effective deadline is end - bufferMin (30). Early arrival waits.
+ *   simulateSchedule(order, durMin, schedCtx) -> {legs, driveMin, violations}
+ *   minutesMatrix(matrix, source) -> drive-minute matrix parallel to matrix
+ *   parseClockToMin("9:00 AM") -> 540 ; formatClock(540) -> "9:00 AM"
  *   buildDurationMatrix(points, fetchFn) -> Promise<{matrix, source}>
  *   optimizeRouteAsync(points, {startIdx, firstIdx, lastIdx, fetchFn}) -> Promise<{order, source}>
  *   buildMapsLinks(originLabel, orderedStops, {avoid}) -> [{label, url}]
@@ -24,15 +30,53 @@
 
 /* Arrow schedule cards repeat this block per stop:
  *   <customer name>   <- DISCARDED, never stored
- *   <time e.g. 9:00 AM> <- DISCARDED
+ *   <time e.g. 9:00 AM> <- captured as apptMin (minutes from midnight)
  *   <street e.g. "1014 Kirkwood Ave">
  *   <city, ST ZIP e.g. "Nashville, TN 37204-2516">
  *   <job type e.g. "Sentricon Guarantee/Coverage">
- * Output objects NEVER carry a `name` field.
+ * Output objects NEVER carry a `name` field. Appointment times ARE stored
+ * (Aaron authorized 2026-10-01); names are not.
  */
 var CITY_ZIP_RE = /^(.+?),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?$/;
 var STREET_RE = /^\d+\s+[A-Za-z]/;
 var TIME_RE = /^\d{1,2}:\d{2}/;
+
+/* "9:00 AM" -> 540, "2:30pm" -> 870, "14:30" -> 870, garbage -> null. */
+function parseClockToMin(s) {
+  var t = String(s == null ? '' : s).trim();
+  var m = t.match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  var h = Number(m[1]), mm = Number(m[2]);
+  if (mm > 59) return null;
+  var rest = t.slice(m[0].length).trim();
+  var ap = rest.match(/^([APap])\.?\s*[Mm]\.?/);
+  if (ap) {
+    if (h < 1 || h > 12) return null;
+    var isPM = ap[1].toUpperCase() === 'P';
+    if (isPM && h !== 12) h += 12;
+    if (!isPM && h === 12) h = 0;
+  } else if (rest.length > 0 || h > 23) {
+    return null; /* trailing garbage or bad 24h hour */
+  }
+  return h * 60 + mm;
+}
+
+/* 540 -> "9:00 AM", 870 -> "2:30 PM". */
+function formatClock(min) {
+  var m = ((Math.round(min) % 1440) + 1440) % 1440;
+  var h = Math.floor(m / 60), mm = m % 60;
+  var ap = h < 12 ? 'AM' : 'PM';
+  var h12 = h % 12; if (h12 === 0) h12 = 12;
+  return h12 + ':' + (mm < 10 ? '0' : '') + mm + ' ' + ap;
+}
+
+/* Remaining service minutes for a checked-in stop: the full service duration
+ * minus elapsed time since check-in, floored at 0. Pure helper so the app can
+ * compute an honest departure time ("depart when this service finishes"). */
+function remainingServiceMin(serviceMin, startedAtMs, nowMs) {
+  var elapsedMin = (nowMs - startedAtMs) / 60000;
+  return Math.max(0, serviceMin - elapsedMin);
+}
 
 function parseOcrText(text) {
   var lines = String(text == null ? '' : text)
@@ -41,6 +85,7 @@ function parseOcrText(text) {
     .filter(function (l) { return l.length > 0; });
 
   var out = [];
+  var prevCity = -1; /* index of the previous stop's city line: block boundary */
   for (var i = 0; i < lines.length; i++) {
     var m = lines[i].match(CITY_ZIP_RE);
     if (!m) continue;
@@ -52,6 +97,18 @@ function parseOcrText(text) {
       if (CITY_ZIP_RE.test(lines[k])) break; /* previous stop's block */
     }
     if (!street) continue; /* city line without a street is not a stop */
+
+    /* apptMin = nearest preceding time line inside this stop's block
+     * (name -> time -> street -> city). The name itself is never stored. */
+    var apptMin = null;
+    for (var t = k - 1; t > prevCity; t--) {
+      if (CITY_ZIP_RE.test(lines[t])) break;
+      if (TIME_RE.test(lines[t])) {
+        var tm = lines[t].match(/^\d{1,2}:\d{2}(?:\s*[APap]\.?\s*[Mm]\.?)?/);
+        var pv = tm ? parseClockToMin(tm[0]) : null;
+        if (pv !== null) { apptMin = pv; break; }
+      }
+    }
 
     /* jobType = first FOLLOWING line that is not a time and < 60 chars.
      * Stop at the next stop's block (street/city line). If the candidate is
@@ -74,8 +131,10 @@ function parseOcrText(text) {
       city: m[1].trim(),
       state: m[2],
       zip: m[3],
-      jobType: jobType
+      jobType: jobType,
+      apptMin: apptMin
     });
+    prevCity = i;
   }
   return out;
 }
@@ -161,6 +220,191 @@ function pathCost(order, matrix) {
   return c;
 }
 
+/* ------------------------------------------------------------------ */
+/* 6.4b Time-window scheduling (v1.9)                                    */
+/*                                                                     */
+/* Confirmed stops carry an arrival window {start, end} (minutes from   */
+/* midnight). The effective deadline is end - bufferMin (30): the      */
+/* driver should ARRIVE by then, with the 30-minute buffer absorbing    */
+/* the "should be there" vs "must be there" gap. Arriving early is      */
+/* fine (the driver waits); arriving late accrues a heavy penalty.      */
+/* Unconfirmed stops have no window and move freely.                   */
+/* ------------------------------------------------------------------ */
+
+var DEFAULT_SERVICE_MIN = 45;
+var WINDOW_BUFFER_MIN = 30;
+
+/* Drive-minute matrix parallel to `matrix`: osrm holds seconds,
+ * haversine holds miles. Unreachable legs become Infinity. */
+function minutesMatrix(matrix, source) {
+  var m = matrix || [];
+  return m.map(function (row) {
+    return (row || []).map(function (v) {
+      if (v === null || v === undefined || !isFinite(v)) return Infinity;
+      return (source === 'osrm') ? v / 60 : v * HAVERSINE_MIN_PER_MI;
+    });
+  });
+}
+
+function serviceMinAt(ctx, i) {
+  var s = ctx ? ctx.serviceMin : null;
+  var v;
+  if (Array.isArray(s)) v = s[i];
+  else v = s;
+  return (v !== null && v !== undefined && v > 0) ? v : DEFAULT_SERVICE_MIN;
+}
+
+/* Normalized scheduling context shared by simulate/score/repair. */
+function schedCtx(o, n) {
+  o = o || {};
+  var windows = o.windows || [];
+  var maxStart = -Infinity, anyWindow = false;
+  var lim = Math.max(n || 0, windows.length);
+  for (var i = 0; i < lim; i++) {
+    var w = windows[i];
+    if (w && w.start !== null && w.start !== undefined &&
+        w.end !== null && w.end !== undefined) {
+      anyWindow = true;
+      if (w.start > maxStart) maxStart = w.start;
+    }
+  }
+  return {
+    windows: windows,
+    departMin: (o.departMin !== null && o.departMin !== undefined) ? o.departMin : 0,
+    serviceMin: o.serviceMin,
+    bufferMin: (o.bufferMin !== null && o.bufferMin !== undefined) ? o.bufferMin : WINDOW_BUFFER_MIN,
+    maxStart: maxStart,
+    anyWindow: anyWindow
+  };
+}
+
+/* Walk `order` over a drive-minute matrix, applying service durations and
+ * arrival windows. Returns {legs, driveMin, violations}.
+ * legs[i]: {point, arrivalMin, waitMin, lateMin, winStart, winEnd, effEnd}
+ * violations: subset of legs that missed their buffered deadline. */
+function simulateSchedule(order, durMin, ctx) {
+  var c = ctx || {};
+  var windows = c.windows || [];
+  var bufferMin = (c.bufferMin !== null && c.bufferMin !== undefined) ? c.bufferMin : WINDOW_BUFFER_MIN;
+  var t = (c.departMin !== null && c.departMin !== undefined) ? c.departMin : 0;
+  var drive = 0, legs = [], violations = [];
+  var ord = order || [];
+  /* The start point (order[0]) can be a STOP — not just the GPS origin — when
+   * GPS is unavailable (origin dropped) or a checked-in stop is the effective
+   * origin. Its "arrival" is departMin (we're already there); validate its
+   * window too, or a confirmed first stop's missed window goes unreported. */
+  if (ord.length > 0) {
+    var sw = windows[ord[0]];
+    if (sw && sw.start !== null && sw.start !== undefined &&
+        sw.end !== null && sw.end !== undefined) {
+      var sEffEnd = sw.end - bufferMin;
+      var sLeg = { point: ord[0], arrivalMin: t, waitMin: 0, lateMin: 0,
+                   winStart: sw.start, winEnd: sw.end, effEnd: sEffEnd };
+      if (t > sEffEnd) {
+        sLeg.lateMin = t - sEffEnd;
+        violations.push({ point: ord[0], winStart: sw.start, winEnd: sw.end,
+                          effEnd: sEffEnd, arrivalMin: sLeg.arrivalMin,
+                          lateMin: sLeg.lateMin });
+      } else if (t < sw.start) {
+        sLeg.waitMin = sw.start - t;
+      }
+      legs.push(sLeg);
+    }
+  }
+  for (var k = 1; k < ord.length; k++) {
+    var prev = ord[k - 1], cur = ord[k];
+    var row = durMin ? durMin[prev] : null;
+    var d = row ? row[cur] : null;
+    /* unreachable leg: astronomic drive time so no optimizer picks it */
+    var dm = (d === null || d === undefined || !isFinite(d)) ? 1e9 : d;
+    drive += dm;
+    t += dm;
+    var w = windows[cur];
+    var leg = { point: cur, arrivalMin: t, waitMin: 0, lateMin: 0,
+                winStart: null, winEnd: null, effEnd: null };
+    if (w && w.start !== null && w.start !== undefined &&
+        w.end !== null && w.end !== undefined) {
+      var effEnd = w.end - bufferMin;
+      leg.winStart = w.start; leg.winEnd = w.end; leg.effEnd = effEnd;
+      if (t < w.start) { leg.waitMin = w.start - t; t = w.start; }
+      else if (t > effEnd) {
+        leg.lateMin = t - effEnd;
+        violations.push({ point: cur, winStart: w.start, winEnd: w.end,
+                          effEnd: effEnd, arrivalMin: leg.arrivalMin,
+                          lateMin: leg.lateMin });
+      }
+    }
+    legs.push(leg);
+    t += serviceMinAt(c, cur);
+  }
+  return { legs: legs, driveMin: drive, violations: violations };
+}
+
+/* Total cost of an order, compared LEXICOGRAPHICALLY so confirmed stops are
+ * protected in earliest-window-start order no matter what:
+ *   1. miss vector — one slot per windowed stop, sorted by window start
+ *      ascending; 1 = missed its buffered deadline, 0 = met. Compared slot
+ *      by slot, earliest window first.
+ *   2. total lateness minutes across all violations.
+ *   3. drive minutes.
+ * A scalar weight can never guarantee (1); this ordering does. */
+function scheduleCost(order, durMin, ctx) {
+  var sim = simulateSchedule(order, durMin, ctx);
+  var winIdx = [];
+  for (var i = 0; i < ctx.windows.length; i++) {
+    var w = ctx.windows[i];
+    if (w && w.start !== null && w.start !== undefined &&
+        w.end !== null && w.end !== undefined) winIdx.push(i);
+  }
+  winIdx.sort(function (a, b) { return ctx.windows[a].start - ctx.windows[b].start; });
+  var missed = {}, lateMin = 0;
+  for (var k = 0; k < sim.violations.length; k++) {
+    missed[sim.violations[k].point] = true;
+    lateMin += sim.violations[k].lateMin;
+  }
+  var misses = winIdx.map(function (i) { return missed[i] ? 1 : 0; });
+  return { misses: misses, lateMin: lateMin, driveMin: sim.driveMin,
+           violations: sim.violations, legs: sim.legs };
+}
+/* True if cost a is strictly better than cost b under the lexicographic order. */
+function costLess(a, b) {
+  var n = Math.max(a.misses.length, b.misses.length);
+  for (var i = 0; i < n; i++) {
+    var am = a.misses[i] || 0, bm = b.misses[i] || 0;
+    if (am !== bm) return am < bm;
+  }
+  if (Math.abs(a.lateMin - b.lateMin) > 1e-9) return a.lateMin < b.lateMin;
+  return a.driveMin < b.driveMin - 1e-9;
+}
+
+/* Repair pass: for still-violated confirmed stops (earliest window first),
+ * try relocating each to every earlier legal position; keep improvements.
+ * Pinned positions (first at 1, last at end) are never moved. */
+function repairWindows(order, durMin, ctx, lo, endExclusive) {
+  var ord = order.slice();
+  var cost = scheduleCost(ord, durMin, ctx);
+  for (var iter = 0; iter < 60; iter++) {
+    var sim = simulateSchedule(ord, durMin, ctx);
+    if (!sim.violations.length) break;
+    var vs = sim.violations.slice().sort(function (a, b) { return a.winStart - b.winStart; });
+    var improved = false;
+    for (var vi = 0; vi < vs.length && !improved; vi++) {
+      var pos = ord.indexOf(vs[vi].point);
+      if (pos < lo || pos >= endExclusive) continue; /* pinned: cannot move */
+      for (var np = lo; np < endExclusive && !improved; np++) {
+        if (np === pos) continue;
+        var cand = ord.slice();
+        cand.splice(pos, 1);
+        cand.splice(np > pos ? np - 1 : np, 0, vs[vi].point);
+        var cc = scheduleCost(cand, durMin, ctx);
+        if (costLess(cc, cost)) { ord = cand; cost = cc; improved = true; }
+      }
+    }
+    if (!improved) break;
+  }
+  return ord;
+}
+
 function optimizeOrder(matrix, opts) {
   var o = opts || {};
   var start = (o.start === undefined || o.start === null) ? 0 : o.start;
@@ -210,10 +454,22 @@ function optimizeOrder(matrix, opts) {
   for (var s = 0; s < n; s++) { if (!used[s]) order.push(s); } /* stragglers */
 
   /* 2-opt improvement; keep start fixed at 0, the pinned-first stop fixed at
-   * position 1, and the pinned-last stop fixed at the end */
+   * position 1, and the pinned-last stop fixed at the end.
+   * With time windows present the cost is lexicographic (earliest windows
+   * protected first, then lateness, then drive); without windows it is the
+   * original pure drive cost, bit-for-bit identical behavior to before. */
   var lo = (pinnedFirst !== null) ? 2 : 1;
   var endExclusive = (pinned !== null) ? order.length - 1 : order.length;
-  var curCost = pathCost(order, matrix);
+  var sctx = schedCtx(o, n);
+  var useWindows = sctx.anyWindow;
+  var durMin = useWindows ? (o.durMin || minutesMatrix(matrix, o.source)) : null;
+  var costOf = useWindows
+    ? function (ord) { return scheduleCost(ord, durMin, sctx); }
+    : function (ord) { return pathCost(ord, matrix); };
+  var better = useWindows
+    ? function (a, b) { return costLess(a, b); }
+    : function (a, b) { return a < b - 1e-9; };
+  var curCost = costOf(order);
   var improved = true;
   while (improved) {
     improved = false;
@@ -223,8 +479,8 @@ function optimizeOrder(matrix, opts) {
         for (var a = i, b = j; a < b; a++, b--) {
           var tmp = cand[a]; cand[a] = cand[b]; cand[b] = tmp;
         }
-        var cc = pathCost(cand, matrix);
-        if (cc < curCost - 1e-9) {
+        var cc = costOf(cand);
+        if (better(cc, curCost)) {
           for (var q = 0; q < cand.length; q++) order[q] = cand[q];
           curCost = cc;
           improved = true;
@@ -233,6 +489,7 @@ function optimizeOrder(matrix, opts) {
       }
     }
   }
+  if (useWindows) order = repairWindows(order, durMin, sctx, lo, endExclusive);
   return order;
 }
 
@@ -289,10 +546,21 @@ function optimizeRouteAsync(points, opts) {
   var firstIdx = (o.firstIdx === undefined) ? null : o.firstIdx;
   var lastIdx = (o.lastIdx === undefined) ? null : o.lastIdx;
   return buildDurationMatrix(points, o.fetchFn).then(function (r) {
+    var durMin = minutesMatrix(r.matrix, r.source);
+    var order = optimizeOrder(r.matrix, {
+      start: startIdx, first: firstIdx, last: lastIdx,
+      windows: o.windows, durMin: durMin, source: r.source,
+      departMin: o.departMin, serviceMin: o.serviceMin, bufferMin: o.bufferMin
+    });
+    var sctx = schedCtx({ windows: o.windows, departMin: o.departMin,
+                          serviceMin: o.serviceMin, bufferMin: o.bufferMin },
+                        r.matrix.length);
     return {
-      order: optimizeOrder(r.matrix, { start: startIdx, first: firstIdx, last: lastIdx }),
+      order: order,
       source: r.source,
-      matrix: r.matrix /* v1.4: exposed so callers can score any order */
+      matrix: r.matrix, /* v1.4: exposed so callers can score any order */
+      durMin: durMin,   /* v1.9: drive minutes, parallel to matrix */
+      schedule: sctx.anyWindow ? simulateSchedule(order, durMin, sctx) : null
     };
   });
 }
@@ -509,7 +777,14 @@ var RouteCore = {
   parseArcGisCandidates: parseArcGisCandidates,
   routeMinutesForOrder: routeMinutesForOrder,
   estimateMinutesHaversine: estimateMinutesHaversine,
-  formatMins: formatMins
+  formatMins: formatMins,
+  parseClockToMin: parseClockToMin,
+  formatClock: formatClock,
+  remainingServiceMin: remainingServiceMin,
+  minutesMatrix: minutesMatrix,
+  simulateSchedule: simulateSchedule,
+  scheduleCost: scheduleCost,
+  costLess: costLess
 };
 
 if (typeof module !== 'undefined' && module.exports) {

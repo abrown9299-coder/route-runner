@@ -6,7 +6,7 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261001-213858">
+<meta name="app-version" content="20261001-234757">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -116,8 +116,41 @@
     <label class="set-row check"><span>Avoid highways</span><input id="setHwy" type="checkbox"></label>
     <label class="set-row check"><span>Return to start at end</span><input id="setReturn" type="checkbox"></label>
     <label class="set-row check"><span>Save route history</span><input id="setHistory" type="checkbox"></label>
+    <div class="set-sec">
+      <h3>Service times</h3>
+      <label class="set-row"><span>Default service time</span><select id="setSvcDefault"></select></label>
+      <div id="svcRows"></div>
+      <button id="svcResetAll" class="btn">Reset all to default</button>
+      <p class="fine">Job types are learned from your imports over time — each can have its own duration.</p>
+    </div>
     <button id="clearRoute" class="btn danger">🗑 Clear current route</button>
     <p class="fine">RouteRunner runs entirely on your phone. No account, no server, no AI.</p>
+  </div>
+</div>
+
+<!-- Confirm-stop time window popup -->
+<div id="winSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>⏰ Confirm stop</h2><button id="winCancel" class="icon-btn">✕</button></div>
+    <p id="winAddr" class="fine"></p>
+    <p class="fine">Arrival window — you must arrive within these times (a 30-minute buffer is built in at the end).</p>
+    <div class="win-times">
+      <label>Arrive after<input id="winStart" type="time"></label>
+      <label>Arrive by<input id="winEnd" type="time"></label>
+    </div>
+    <button id="winOk" class="btn primary">✓ Confirm window</button>
+    <button id="winRemove" class="btn ghost danger" hidden>Remove window</button>
+  </div>
+</div>
+
+<!-- At-risk window warning -->
+<div id="riskSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>⚠ Running behind</h2></div>
+    <p class="fine">These confirmed stops may miss their arrival window, even on the best route:</p>
+    <ul id="riskList" class="risk-list"></ul>
+    <label class="set-row check"><span>Don't warn me again for this route</span><input id="riskMute" type="checkbox"></label>
+    <button id="riskOk" class="btn primary">Got it</button>
   </div>
 </div>
 
