@@ -277,9 +277,90 @@ function optimizeRouteAsync(points, opts) {
   return buildDurationMatrix(points, o.fetchFn).then(function (r) {
     return {
       order: optimizeOrder(r.matrix, { start: startIdx, last: lastIdx }),
-      source: r.source
+      source: r.source,
+      matrix: r.matrix /* v1.4: exposed so callers can score any order */
     };
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* 6.7 Geocode helpers + drive-time estimates (v1.4)                     */
+/* ------------------------------------------------------------------ */
+
+/* Expand a trailing USPS street-suffix abbreviation:
+ * "1004 Summerview Ct" -> "1004 Summerview Court". Last token only,
+ * case-insensitive, tolerates a trailing period. */
+var SUFFIX_EXPAND = {
+  ct: 'Court', ave: 'Avenue', av: 'Avenue', dr: 'Drive', hts: 'Heights',
+  ln: 'Lane', cir: 'Circle', blvd: 'Boulevard', st: 'Street', rd: 'Road',
+  pl: 'Place', ter: 'Terrace', pkwy: 'Parkway', trl: 'Trail', sq: 'Square'
+};
+function expandStreetSuffix(street) {
+  var s = String(street == null ? '' : street);
+  /* the match is only the trailing token, so the replacement is just `full` —
+   * replace() itself preserves everything before the match. */
+  return s.replace(/\b([A-Za-z]+)\.?\s*$/, function (m, tok) {
+    return SUFFIX_EXPAND[tok.toLowerCase()] || m;
+  });
+}
+
+/* Esri World Geocoder — free, keyless, CORS-enabled, commercial-grade data. */
+function arcgisGeocodeUrl(query) {
+  return 'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/' +
+    'findAddressCandidates?f=json&singleLine=' + encodeURIComponent(query) +
+    '&outSR=4326&maxLocations=3';
+}
+
+/* First scored candidate -> {lat, lng, score, address}; null on anything odd. */
+function parseArcGisCandidates(json) {
+  try {
+    var c = json && json.candidates;
+    if (!c || !c.length) return null;
+    var best = c[0];
+    if (!best || !best.location || typeof best.score !== 'number') return null;
+    var lat = Number(best.location.y), lng = Number(best.location.x);
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    return { lat: lat, lng: lng, score: best.score, address: best.address || '' };
+  } catch (e) {
+    return null;
+  }
+}
+
+/* Total drive minutes for `order` (array of point indices) over a matrix.
+ * osrm matrices hold seconds; haversine matrices hold miles
+ * (road miles ~= haversine x 1.35, at 30 mph avg -> minutes = miles x 2.7).
+ * Unreachable legs (Infinity) are skipped, never poison the total. */
+var HAVERSINE_MIN_PER_MI = 2.7;
+function routeMinutesForOrder(matrix, order, source) {
+  var total = 0;
+  var ord = order || [];
+  for (var k = 0; k < ord.length - 1; k++) {
+    var v = matrix && matrix[ord[k]] ? matrix[ord[k]][ord[k + 1]] : null;
+    if (v === null || v === undefined || !isFinite(v)) continue;
+    total += (source === 'osrm') ? v / 60 : v * HAVERSINE_MIN_PER_MI;
+  }
+  return total;
+}
+
+/* Rough pre-optimization estimate from consecutive haversine legs. */
+function estimateMinutesHaversine(points) {
+  var total = 0;
+  var pts = points || [];
+  for (var i = 0; i < pts.length - 1; i++) {
+    var a = pts[i], b = pts[i + 1];
+    if (a && b && a.lat != null && b.lat != null && a.lng != null && b.lng != null) {
+      total += haversineMi(a, b) * HAVERSINE_MIN_PER_MI;
+    }
+  }
+  return total;
+}
+
+/* 74 -> "1h 14m", 58 -> "58m", 0.4 -> "<1m". */
+function formatMins(mins) {
+  var m = Math.round(mins);
+  if (m < 1) return '<1m';
+  if (m < 60) return m + 'm';
+  return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
 }
 
 /* ------------------------------------------------------------------ */
@@ -408,7 +489,13 @@ var RouteCore = {
   optimizeRouteAsync: optimizeRouteAsync,
   buildMapsLinks: buildMapsLinks,
   encodeShare: encodeShare,
-  decodeShare: decodeShare
+  decodeShare: decodeShare,
+  expandStreetSuffix: expandStreetSuffix,
+  arcgisGeocodeUrl: arcgisGeocodeUrl,
+  parseArcGisCandidates: parseArcGisCandidates,
+  routeMinutesForOrder: routeMinutesForOrder,
+  estimateMinutesHaversine: estimateMinutesHaversine,
+  formatMins: formatMins
 };
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -10,6 +10,10 @@
     optimized: false,
     matrixSource: null,  // 'osrm' | 'haversine'
     pinModeStopId: null,
+    preEstimateMin: 0,   // rough haversine drive estimate, pre-optimization
+    lastEstimate: null,  // {beforeMin, afterMin, savedMin, source} post-optimization
+    geocoding: false,    // background geocode in flight
+    geocodeStatus: '',
   };
   const settings = {
     defaultStart: '', avoidTolls: false, avoidHwy: false,
@@ -22,6 +26,7 @@
       localStorage.setItem(LS_ROUTE, JSON.stringify({
         stops: state.stops, origin: state.origin,
         optimized: state.optimized, matrixSource: state.matrixSource,
+        preEstimateMin: state.preEstimateMin, lastEstimate: state.lastEstimate,
       }));
       localStorage.setItem(LS_SET, JSON.stringify(settings));
     } catch (e) { /* storage full/blocked — app still works for the session */ }
@@ -36,6 +41,8 @@
         state.origin = r.origin || state.origin;
         state.optimized = !!r.optimized;
         state.matrixSource = r.matrixSource || null;
+        state.preEstimateMin = r.preEstimateMin || 0;
+        state.lastEstimate = r.lastEstimate || null;
       }
     } catch (e) {}
     if (settings.defaultStart && state.origin.type === 'gps' && !state.origin.lat) {
@@ -56,6 +63,10 @@
   }
   function markDirty(msg) {
     state.optimized = false; state.matrixSource = null;
+    state.lastEstimate = null;
+    // refresh the rough pre-optimization estimate from whatever is located
+    const pts = locatedPoints();
+    state.preEstimateMin = pts.length > 1 ? RouteCore.estimateMinutesHaversine(pts) : 0;
     save(); render();
     if (msg) toast(msg);
   }
@@ -103,6 +114,7 @@
           (s.jobType ? '<span class="chip">' + esc(s.jobType) + '</span>' : '') +
           (s.isLast ? '<span class="chip last">🏁 last stop</span>' : '') +
           (needsPin ? '<span class="chip warn">📍 no location — tap to drop pin</span>' : '') +
+          (!needsPin && s.approx ? '<span class="chip">≈ area</span>' : '') +
           (s.note ? '<span class="chip">📝 ' + esc(s.note) + '</span>' : '') +
         '</div></div>' +
         '<div class="acts">' +
@@ -118,13 +130,29 @@
     // status line
     const st = $('routeStatus');
     const unlocated = state.stops.filter((s) => s.lat == null).length;
+    const approx = state.stops.filter((s) => s.lat != null && s.approx).length;
     if (!total) { st.textContent = ''; st.className = 'status-line'; }
+    else if (state.geocoding && !state.optimized) {
+      st.textContent = state.geocodeStatus || 'Locating addresses…';
+      st.className = 'status-line warn';
+    }
     else if (!state.optimized) {
-      st.textContent = 'Not optimized yet — tap ⚡ Optimize when ready.';
+      st.textContent = state.preEstimateMin > 0
+        ? 'Est. drive ≈ ' + RouteCore.formatMins(state.preEstimateMin) +
+          ' (rough, no traffic) — tap ⚡ Optimize when ready.'
+        : 'Not optimized yet — tap ⚡ Optimize when ready.';
       st.className = 'status-line warn';
     } else {
-      st.textContent = (state.matrixSource === 'osrm' ? 'Optimized by drive time' : 'Optimized by straight-line distance') +
-        ' · ' + total + ' stops' + (unlocated ? ' · ' + unlocated + ' need a pin' : '');
+      const e = state.lastEstimate;
+      let t = (state.matrixSource === 'osrm' ? 'Optimized by drive time'
+          : 'Optimized by straight-line distance') + ' · ' + total + ' stops';
+      if (e && e.afterMin > 0) {
+        t += ' · ≈' + RouteCore.formatMins(e.afterMin);
+        if (e.savedMin >= 1) t += ' · saves ~' + RouteCore.formatMins(e.savedMin) + ' vs original';
+      }
+      if (approx) t += ' · ' + approx + ' approx. area';
+      if (unlocated) t += ' · ' + unlocated + ' need a pin';
+      st.textContent = t;
       st.className = 'status-line ok';
     }
     $('optimizeBtn').classList.toggle('needs-rerun', total > 0 && !state.optimized);
@@ -234,7 +262,7 @@
     };
     addStops([s]);
     $('mStreet').value = ''; $('mZip').value = ''; $('mJob').value = '';
-    toast('Stop added — it will be located when you optimize');
+    toast('Stop added — locating it now');
   };
 
   /* ---------- add: screenshots / OCR ---------- */
@@ -276,6 +304,7 @@
     const added = state.stops.length - before;
     markDirty('Added ' + added + ' stop' + (added === 1 ? '' : 's') +
       (merged.removed ? ' · ' + merged.removed + ' duplicate' + (merged.removed === 1 ? '' : 's') + ' skipped' : ''));
+    geocodeInBackground();
   });
 
   function addStops(arr) {
@@ -291,6 +320,7 @@
     const added = state.stops.length - before;
     markDirty('Added ' + added + ' stop' + (added === 1 ? '' : 's') +
       (merged.removed ? ', ' + merged.removed + ' duplicate' + (merged.removed === 1 ? '' : 's') + ' skipped' : ''));
+    geocodeInBackground();
   }
 
   /* ---------- geocoding ---------- */
@@ -345,9 +375,61 @@
     });
   }
 
-  async function ensureGeocoded(statusFn) {
+  async function fetchJson(url, opts, timeoutMs) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs || 12000);
+    try {
+      const r = await fetch(url, Object.assign({}, opts, { signal: ctrl.signal }));
+      if (!r.ok) throw new Error('http ' + r.status);
+      return await r.json();
+    } finally { clearTimeout(t); }
+  }
+
+  /* Esri World Geocoder: free, keyless, CORS-enabled, commercial-grade data.
+   * Verified score 100 on "1004 Summerview Ct, Nashville, TN 37221" —
+   * the address Census/Nominatim/Photon all miss. */
+  async function geocodeArcGIS(s, query) {
+    const j = await fetchJson(RouteCore.arcgisGeocodeUrl(query || stopLabel(s)));
+    const p = RouteCore.parseArcGisCandidates(j);
+    if (p && p.score >= 80) {
+      s.lat = p.lat; s.lng = p.lng; s.geocodeSource = 'arcgis'; s.approx = false;
+      return true;
+    }
+    return false;
+  }
+
+  /* Last resort: pin the ZIP area so the optimizer puts the stop in the
+   * right part of town instead of dead-last. */
+  async function geocodeZipApprox(s) {
+    const m = String(s.zip || '').match(/\d{5}/);
+    if (!m || s.lat != null) return false;
+    try {
+      const j = await fetchJson(RouteCore.arcgisGeocodeUrl(m[0]));
+      const p = RouteCore.parseArcGisCandidates(j);
+      if (p) {
+        s.lat = p.lat; s.lng = p.lng; s.geocodeSource = 'zip-approx'; s.approx = true;
+        return true;
+      }
+    } catch (e) { /* fall through — stays unlocated */ }
+    return false;
+  }
+
+  /* Located points in current display order (origin first when known). */
+  function locatedPoints() {
+    const pts = [];
+    if (state.origin.lat != null && state.origin.lng != null) {
+      pts.push({ lat: state.origin.lat, lng: state.origin.lng });
+    }
+    state.stops.forEach((s) => {
+      if (s.lat != null && s.lng != null) pts.push({ lat: s.lat, lng: s.lng });
+    });
+    return pts;
+  }
+
+  async function ensureGeocoded(statusFn, opts) {
+    const o = opts || {};
     // origin
-    if (state.origin.type === 'gps' && state.origin.lat == null) {
+    if (state.origin.type === 'gps' && state.origin.lat == null && !o.skipGps) {
       statusFn('Getting your location…');
       const g = await getGps();
       if (g) { state.origin.lat = g.lat; state.origin.lng = g.lng; }
@@ -357,19 +439,75 @@
       const tmp = { street: state.origin.label };
       if (await geocodeNominatim(tmp).catch(() => false)) {
         state.origin.lat = tmp.lat; state.origin.lng = tmp.lng;
+      } else {
+        try {
+          if (await geocodeArcGIS(tmp)) {
+            state.origin.lat = tmp.lat; state.origin.lng = tmp.lng;
+          }
+        } catch (e) {}
       }
     }
-    // stops
+    // stops: Census batch -> ArcGIS -> Nominatim -> suffix retry -> ZIP area
     const missing = state.stops.filter((s) => s.lat == null);
     if (missing.length) {
-      statusFn('Locating ' + missing.length + ' address' + (missing.length === 1 ? '' : 'es') + '…');
-      try { await geocodeCensusBatch(missing); } catch (e) { /* fall through to nominatim */ }
-      const still = missing.filter((s) => s.lat == null);
+      statusFn('Locating ' + missing.length + ' address' +
+        (missing.length === 1 ? '' : 'es') + '…');
+      try { await geocodeCensusBatch(missing); } catch (e) { /* fall through */ }
+      let still = missing.filter((s) => s.lat == null);
+      for (const s of still) {
+        try { await geocodeArcGIS(s); } catch (e) {}
+        await sleep(400);
+      }
+      still = missing.filter((s) => s.lat == null);
       for (const s of still) {
         try { await geocodeNominatim(s); } catch (e) {}
         await sleep(1100); // nominatim politeness
       }
+      still = missing.filter((s) => s.lat == null);
+      for (const s of still) {
+        const expanded = RouteCore.expandStreetSuffix(s.street || '');
+        if (expanded && expanded !== s.street) {
+          const q = [expanded, s.city, s.state, s.zip].filter(Boolean).join(', ');
+          try { await geocodeArcGIS(s, q); } catch (e) {}
+          await sleep(400);
+        }
+      }
+      still = missing.filter((s) => s.lat == null);
+      for (const s of still) {
+        await geocodeZipApprox(s);
+        await sleep(300);
+      }
     }
+  }
+
+  /* Geocode right after import so the map preview + rough estimate work
+   * before optimization. One shared in-flight promise: Optimize awaits it
+   * instead of racing it. */
+  let geocodeInflight = null;
+  function geocodeInBackground() {
+    if (geocodeInflight || state.geocoding) return;
+    if (!state.stops.some((s) => s.lat == null)) return;
+    state.geocoding = true;
+    render();
+    geocodeInflight = (async () => {
+      try {
+        await ensureGeocoded((t) => {
+          state.geocodeStatus = t;
+          if (!state.optimized) render();
+        }, { skipGps: true });
+      } finally {
+        state.geocoding = false;
+        state.geocodeStatus = '';
+        geocodeInflight = null;
+      }
+      markDirty(); // recompute rough estimate + re-render
+      // auto-show the map preview once, so pins are visible pre-optimization
+      if ($('mapWrap').hidden && state.stops.some((s) => s.lat != null)) {
+        try { await showMap(); } catch (e) { /* map needs a connection */ }
+      } else {
+        render();
+      }
+    })();
   }
 
   /* ---------- optimize ---------- */
@@ -379,6 +517,10 @@
     btn.disabled = true;
     const setStatus = (t) => { $('routeStatus').textContent = t; $('routeStatus').className = 'status-line warn'; };
     try {
+      if (geocodeInflight) {
+        setStatus('Finishing locating addresses…');
+        try { await geocodeInflight; } catch (e) {}
+      }
       await ensureGeocoded(setStatus);
       const located = state.stops.filter((s) => s.lat != null);
       const unlocated = state.stops.filter((s) => s.lat == null);
@@ -393,9 +535,20 @@
       const lastIdx = lastStop ? points.findIndex((p) => p._stopId === lastStop.id) : null;
 
       setStatus('Optimizing route…');
-      const { order, source } = await RouteCore.optimizeRouteAsync(points, {
+      const beforeOrder = points.map((_, i) => i); // current (import) order
+      const { order, source, matrix } = await RouteCore.optimizeRouteAsync(points, {
         startIdx: Math.max(0, startIdx), lastIdx, fetchFn: fetch.bind(window),
       });
+      // before/after from the SAME matrix: apples-to-apples savings
+      const beforeMin = RouteCore.routeMinutesForOrder(matrix, beforeOrder, source);
+      const afterMin = RouteCore.routeMinutesForOrder(matrix, order, source);
+      state.lastEstimate = {
+        beforeMin: beforeMin,
+        afterMin: afterMin,
+        savedMin: Math.max(0, beforeMin - afterMin),
+        source: source,
+      };
+      state.preEstimateMin = 0;
       const byId = Object.fromEntries(state.stops.map((s) => [s.id, s]));
       const ordered = order
         .map((pi) => points[pi]._stopId)
@@ -521,10 +674,10 @@
     });
     return leafletLoading;
   }
-  $('mapToggle').onclick = async () => {
+  async function showMap() {
     const w = $('mapWrap');
-    if (!w.hidden) { w.hidden = true; $('mapToggle').textContent = '🗺 Map'; return; }
-    try { await loadLeaflet(); } catch (e) { toast('Map needs a connection'); return; }
+    if (!w.hidden) return;
+    await loadLeaflet(); // throws when offline -> caller toasts
     w.hidden = false;
     $('mapToggle').textContent = '🗺 Hide';
     if (!mapObj) {
@@ -537,6 +690,7 @@
         const s = state.stops.find((x) => x.id === state.pinModeStopId);
         if (s) {
           s.lat = e.latlng.lat; s.lng = e.latlng.lng; s.geocodeSource = 'manual-pin';
+          s.approx = false;
           state.pinModeStopId = null;
           markDirty('📍 Pin dropped');
           toast('Pin dropped — re-optimize to re-route');
@@ -544,6 +698,11 @@
       });
     }
     setTimeout(() => { mapObj.invalidateSize(); refreshMap(); }, 50);
+  }
+  $('mapToggle').onclick = async () => {
+    const w = $('mapWrap');
+    if (!w.hidden) { w.hidden = true; $('mapToggle').textContent = '🗺 Map'; return; }
+    try { await showMap(); } catch (e) { toast('Map needs a connection'); }
   };
   function openMapForPin(stopId) {
     state.pinModeStopId = stopId;
