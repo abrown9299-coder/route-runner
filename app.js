@@ -384,6 +384,23 @@
     });
   }
 
+  /* Last known device position (in-memory; refreshed on boot and map open).
+   * Powers the "you are here" dot before optimize ever runs. */
+  let devicePos = null;
+  async function ensureDevicePos() {
+    if (devicePos) return devicePos;
+    try { devicePos = await getGps(); } catch (e) { devicePos = null; }
+    return devicePos;
+  }
+  /* Adopt the device position as the GPS origin (once known). */
+  function adoptDevicePos() {
+    if (devicePos && state.origin.type === 'gps' && state.origin.lat == null) {
+      state.origin.lat = devicePos.lat; state.origin.lng = devicePos.lng;
+      markDirty(); // recompute pre-estimate, save, re-render — no toast
+      refreshMap();
+    }
+  }
+
   async function fetchJson(url, opts, timeoutMs) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs || 12000);
@@ -706,7 +723,15 @@
         }
       });
     }
-    setTimeout(() => { mapObj.invalidateSize(); refreshMap(); }, 50);
+    setTimeout(async () => {
+      try {
+        mapObj.invalidateSize();
+        // Make sure the GPS origin (and "you are here") is known before drawing.
+        if (state.origin.type === 'gps' && state.origin.lat == null) await ensureDevicePos();
+        adoptDevicePos();
+        refreshMap();
+      } catch (e) { /* map draw failures must never break the app */ }
+    }, 50);
   }
   $('mapToggle').onclick = async () => {
     const w = $('mapWrap');
@@ -739,7 +764,19 @@
       const pl = L.polyline(line.map((p) => [p.lat, p.lng]), { color: '#7c5cff', weight: 4 }).addTo(mapObj);
       mapLayers.push(pl);
     }
-    if (pts.length) mapObj.fitBounds(L.latLngBounds(pts.map((p) => [p.lat, p.lng])).pad(0.15));
+    // "You are here" dot — drawn when the device position is known and isn't
+    // already represented by the GPS origin marker.
+    const originIsDevice = state.origin.type === 'gps' && state.origin.lat != null;
+    if (devicePos && !originIsDevice) {
+      const dot = L.circleMarker([devicePos.lat, devicePos.lng], {
+        radius: 9, color: '#ffffff', weight: 2, fillColor: '#2f7bff', fillOpacity: 1,
+      }).addTo(mapObj);
+      dot.bindPopup('You are here');
+      mapLayers.push(dot);
+    }
+    const boundPts = pts.map((p) => [p.lat, p.lng]);
+    if (devicePos && !originIsDevice) boundPts.push([devicePos.lat, devicePos.lng]);
+    if (boundPts.length) mapObj.fitBounds(L.latLngBounds(boundPts).pad(0.15));
   }
 
   /* ---------- clear all / fresh start ---------- */
@@ -761,6 +798,29 @@
     toast('All stops cleared — fresh route ready');
   }
   $('clearAllBtn').onclick = () => resetRoute(false);
+
+  /* ---------- manual refresh: stops are saved AND backed up before anything
+   * navigates, so a failed refresh can never lose them. ---------- */
+  $('refreshBtn').onclick = async () => {
+    try {
+      save(); saveUIState();
+      const r = localStorage.getItem(LS_ROUTE);
+      if (r) localStorage.setItem('rr.route.backup', r);
+      const s = localStorage.getItem(LS_SET);
+      if (s) localStorage.setItem('rr.settings.backup', s);
+    } catch (e) {}
+    try {
+      toast('Checking for updates…');
+      const resp = await fetch('version.json', { cache: 'no-store' });
+      const info = resp.ok ? await resp.json() : null;
+      if (info && info.version && info.version !== APP_VERSION) {
+        applyUpdate(info.version); // toasts, backs up again, reloads
+        return;
+      }
+    } catch (e) { /* offline or check failed — plain reload is still safe */ }
+    saveUIState();
+    location.reload();
+  };
 
   /* ---------- settings ---------- */
   $('settingsBtn').onclick = () => {
@@ -876,6 +936,11 @@
   } catch (e) {}
   restoreUIState();
   checkForUpdate();
+  // Ask for location services right on launch: the permission prompt appears
+  // immediately, and the map can show "you are here" before optimize runs.
+  if (state.origin.type === 'gps' && state.origin.lat == null) {
+    ensureDevicePos().then(adoptDevicePos);
+  }
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) saveUIState();
     else checkForUpdate();
