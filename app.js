@@ -11,6 +11,8 @@
     matrixSource: null,  // 'osrm' | 'haversine'
     pinModeStopId: null,
     preEstimateMin: 0,   // rough haversine drive estimate, pre-optimization
+    preDriveMin: null,   // real OSRM drive time for current order (verified in background)
+    preDriveSource: null, // 'osrm' when preDriveMin is a real routed time
     lastEstimate: null,  // {beforeMin, afterMin, savedMin, source} post-optimization
     geocoding: false,    // background geocode in flight
     geocodeStatus: '',
@@ -27,6 +29,7 @@
         stops: state.stops, origin: state.origin,
         optimized: state.optimized, matrixSource: state.matrixSource,
         preEstimateMin: state.preEstimateMin, lastEstimate: state.lastEstimate,
+        preDriveMin: state.preDriveMin, preDriveSource: state.preDriveSource,
       }));
       localStorage.setItem(LS_SET, JSON.stringify(settings));
     } catch (e) { /* storage full/blocked — app still works for the session */ }
@@ -50,6 +53,8 @@
         state.optimized = !!r.optimized;
         state.matrixSource = r.matrixSource || null;
         state.preEstimateMin = r.preEstimateMin || 0;
+        state.preDriveMin = (r.preDriveMin != null) ? r.preDriveMin : null;
+        state.preDriveSource = r.preDriveSource || null;
         state.lastEstimate = r.lastEstimate || null;
       }
     } catch (e) {}
@@ -72,11 +77,38 @@
   function markDirty(msg) {
     state.optimized = false; state.matrixSource = null;
     state.lastEstimate = null;
+    state.preDriveMin = null; state.preDriveSource = null;
     // refresh the rough pre-optimization estimate from whatever is located
     const pts = locatedPoints();
     state.preEstimateMin = pts.length > 1 ? RouteCore.estimateMinutesHaversine(pts) : 0;
     save(); render();
+    schedulePreDriveTime(); // upgrade the guess to a real drive time in background
     if (msg) toast(msg);
+  }
+
+  /* Verify the real drive time for the current stop order in the background
+   * (debounced so rapid edits collapse into one routing call). Replaces the
+   * haversine guess once the OSRM duration matrix arrives. */
+  let preDriveTimer = null, preDriveToken = 0;
+  function schedulePreDriveTime() {
+    if (preDriveTimer) clearTimeout(preDriveTimer);
+    preDriveTimer = setTimeout(refreshPreDriveTime, 2000);
+  }
+  async function refreshPreDriveTime() {
+    preDriveTimer = null;
+    if (state.optimized) return;
+    const pts = locatedPoints();
+    if (pts.length < 2) return;
+    const my = ++preDriveToken;
+    try {
+      const r = await RouteCore.buildDurationMatrix(pts, fetch.bind(window));
+      if (my !== preDriveToken || state.optimized) return; // superseded
+      if (r.source !== 'osrm') return; // haversine fallback adds nothing new
+      state.preDriveMin = RouteCore.routeMinutesForOrder(
+        r.matrix, pts.map((_, i) => i), 'osrm');
+      state.preDriveSource = 'osrm';
+      save(); render();
+    } catch (e) { /* keep the rough estimate */ }
   }
   let toastTimer = null;
   function toast(msg, action) {
@@ -112,15 +144,16 @@
     $('emptyHint').style.display = total ? 'none' : 'block';
     state.stops.forEach((s, i) => {
       const li = document.createElement('li');
-      li.className = 'stop' + (s.done ? ' done' : '') + (s.isLast ? ' is-last' : '');
+      li.className = 'stop' + (s.done ? ' done' : '') + (s.isLast ? ' is-last' : '') + (s.isFirst ? ' is-first' : '');
       li.dataset.id = s.id;
       const needsPin = s.lat == null || s.lng == null;
       li.innerHTML =
         '<span class="drag" title="Drag to reorder">⠿</span>' +
-        '<span class="num">' + (s.isLast ? '🏁' : (i + 1)) + '</span>' +
+        '<span class="num">' + (s.isFirst ? '🚩' : (s.isLast ? '🏁' : (i + 1))) + '</span>' +
         '<div class="info"><div class="addr">' + esc(stopLabel(s)) + '</div>' +
         '<div class="meta">' +
           (s.jobType ? '<span class="chip">' + esc(s.jobType) + '</span>' : '') +
+          (s.isFirst ? '<span class="chip first">🚩 first stop</span>' : '') +
           (s.isLast ? '<span class="chip last">🏁 last stop</span>' : '') +
           (needsPin ? '<span class="chip warn">📍 no location — tap to drop pin</span>' : '') +
           (!needsPin && s.approx ? '<span class="chip">≈ area</span>' : '') +
@@ -128,6 +161,7 @@
         '</div></div>' +
         '<div class="acts">' +
           '<button class="check-btn' + (s.done ? ' on' : '') + '" data-act="check" title="Mark done">✓</button>' +
+          '<button data-act="first" title="Set as first stop">🚩</button>' +
           '<button data-act="last" title="Set as last stop">🏁</button>' +
           '<button data-act="note" title="Add note">📝</button>' +
           '<button data-act="del" title="Remove stop">✕</button>' +
@@ -146,10 +180,15 @@
       st.className = 'status-line warn';
     }
     else if (!state.optimized) {
-      st.textContent = state.preEstimateMin > 0
-        ? 'Est. drive ≈ ' + RouteCore.formatMins(state.preEstimateMin) +
-          ' (rough, no traffic) — tap ⚡ Optimize when ready.'
-        : 'Not optimized yet — tap ⚡ Optimize when ready.';
+      if (state.preDriveSource === 'osrm' && state.preDriveMin > 0) {
+        st.textContent = 'Est. drive ≈ ' + RouteCore.formatMins(state.preDriveMin) +
+          ' (drive time) — tap ⚡ Optimize when ready.';
+      } else {
+        st.textContent = state.preEstimateMin > 0
+          ? 'Est. drive ≈ ' + RouteCore.formatMins(state.preEstimateMin) +
+            ' (rough, no traffic) — tap ⚡ Optimize when ready.'
+          : 'Not optimized yet — tap ⚡ Optimize when ready.';
+      }
       st.className = 'status-line warn';
     } else {
       const e = state.lastEstimate;
@@ -182,9 +221,16 @@
     }
     const act = btn.dataset.act;
     if (act === 'check') { s.done = !s.done; save(); render(); }
+    else if (act === 'first') {
+      state.stops.forEach((x) => { if (x !== s) x.isFirst = false; });
+      s.isFirst = !s.isFirst;
+      if (s.isFirst) s.isLast = false; // a stop can't be both first and last
+      markDirty(s.isFirst ? '🚩 will be routed first' : 'First-stop pin removed');
+    }
     else if (act === 'last') {
       state.stops.forEach((x) => { if (x !== s) x.isLast = false; });
       s.isLast = !s.isLast;
+      if (s.isLast) s.isFirst = false; // a stop can't be both first and last
       markDirty(s.isLast ? '🏁 will be routed last' : 'Last-stop pin removed');
     }
     else if (act === 'note') {
@@ -241,7 +287,7 @@
             id: uid(), street: [p.name, p.street].filter(Boolean).join(' ') || label,
             city: p.city || '', state: p.state || '', zip: p.postcode || '',
             jobType: '', note: '', lat, lng, geocodeSource: 'search',
-            done: false, isLast: false, source: 'search',
+            done: false, isLast: false, isFirst: false, source: 'search',
           }]);
           $('searchInput').value = '';
           list.hidden = true;
@@ -267,7 +313,7 @@
     const s = {
       id: uid(), street, city: $('mCity').value.trim(), state: $('mState').value.trim(),
       zip: $('mZip').value.trim(), jobType: $('mJob').value.trim(), note: '',
-      lat: null, lng: null, geocodeSource: null, done: false, isLast: false, source: 'manual',
+      lat: null, lng: null, geocodeSource: null, done: false, isLast: false, isFirst: false, source: 'manual',
     };
     addStops([s]);
     $('mStreet').value = ''; $('mZip').value = ''; $('mJob').value = '';
@@ -294,7 +340,7 @@
           parsed.forEach((p) => all.push({
             id: uid(), street: p.street, city: p.city, state: p.state, zip: p.zip,
             jobType: p.jobType || '', note: '', lat: null, lng: null, geocodeSource: null,
-            done: false, isLast: false, source: 'ocr',
+            done: false, isLast: false, isFirst: false, source: 'ocr',
           }));
         } catch (err) { console.warn('OCR failed for one image', err); }
       }
@@ -559,11 +605,13 @@
       if (points[0].lat == null) { points.shift(); startIdx = -1; }
       const lastStop = state.stops.find((s) => s.isLast && s.lat != null);
       const lastIdx = lastStop ? points.findIndex((p) => p._stopId === lastStop.id) : null;
+      const firstStop = state.stops.find((s) => s.isFirst && s.lat != null);
+      const firstIdx = firstStop ? points.findIndex((p) => p._stopId === firstStop.id) : null;
 
       setStatus('Optimizing route…');
       const beforeOrder = points.map((_, i) => i); // current (import) order
       const { order, source, matrix } = await RouteCore.optimizeRouteAsync(points, {
-        startIdx: Math.max(0, startIdx), lastIdx, fetchFn: fetch.bind(window),
+        startIdx: Math.max(0, startIdx), firstIdx, lastIdx, fetchFn: fetch.bind(window),
       });
       // before/after from the SAME matrix: apples-to-apples savings
       const beforeMin = RouteCore.routeMinutesForOrder(matrix, beforeOrder, source);
@@ -646,7 +694,7 @@
       settings: { avoidTolls: settings.avoidTolls, avoidHwy: settings.avoidHwy, returnToStart: settings.returnToStart },
       stops: state.stops.map((s) => ({
         street: s.street, city: s.city, state: s.state, zip: s.zip,
-        jobType: s.jobType, note: s.note, lat: s.lat, lng: s.lng, isLast: s.isLast,
+        jobType: s.jobType, note: s.note, lat: s.lat, lng: s.lng, isLast: s.isLast, isFirst: s.isFirst,
       })),
     };
     const url = location.href.split('#')[0] + RouteCore.encodeShare(payload);
@@ -662,7 +710,7 @@
     const data = RouteCore.decodeShare(location.hash);
     if (!data || !Array.isArray(data.stops)) return false;
     state.stops = data.stops.map((s) => Object.assign({
-      id: uid(), done: false, isLast: !!s.isLast, source: 'shared', geocodeSource: null,
+      id: uid(), done: false, isLast: !!s.isLast, isFirst: !!s.isFirst, source: 'shared', geocodeSource: null,
     }, s));
     if (data.origin) state.origin = data.origin;
     if (data.settings) Object.assign(settings, data.settings);
@@ -751,8 +799,8 @@
     const pts = state.stops.filter((s) => s.lat != null);
     if (state.origin.lat != null) pts.unshift({ lat: state.origin.lat, lng: state.origin.lng, _origin: true });
     pts.forEach((s, i) => {
-      const cls = 'pin-num' + (s.isLast ? ' last' : '') + (s.done ? ' done' : '');
-      const label = s._origin ? '📍' : (s.isLast ? '🏁' : String(i + (state.origin.lat != null ? 0 : 1)));
+      const cls = 'pin-num' + (s.isLast ? ' last' : '') + (s.isFirst ? ' first' : '') + (s.done ? ' done' : '');
+      const label = s._origin ? '📍' : (s.isFirst ? '🚩' : (s.isLast ? '🏁' : String(i + (state.origin.lat != null ? 0 : 1))));
       const m = L.marker([s.lat, s.lng], {
         icon: L.divIcon({ className: '', html: '<div class="' + cls + '">' + esc(label) + '</div>', iconSize: [28, 28] }),
       }).addTo(mapObj);
@@ -788,6 +836,7 @@
     state.matrixSource = null;
     state.lastEstimate = null;
     state.preEstimateMin = 0;
+    state.preDriveMin = null; state.preDriveSource = null;
     state.geocoding = false;
     state.geocodeStatus = '';
     state.pinModeStopId = null;
@@ -951,5 +1000,8 @@
       navigator.serviceWorker.register('sw.js').catch(() => {});
     });
   }
+  // A restored/share-booted route with stops: verify the real drive time too
+  // (markDirty only fires on edits, not on boot).
+  if (state.stops.length && !state.optimized) schedulePreDriveTime();
   window.__rrBooted = true; // boot watchdog in index.html stands down
 })();

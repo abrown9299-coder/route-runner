@@ -9,9 +9,9 @@
  *   dedupeStops(stops)           stops     -> {stops, removed}
  *   haversineMi(a, b)           {lat,lng}x2 -> miles
  *   buildHaversineMatrix(points) -> n x n mile matrix
- *   optimizeOrder(matrix, {start, last}) -> index order (NN + 2-opt, `last` pinned)
+ *   optimizeOrder(matrix, {start, first, last}) -> index order (NN + 2-opt; `first` pinned right after start, `last` pinned at end)
  *   buildDurationMatrix(points, fetchFn) -> Promise<{matrix, source}>
- *   optimizeRouteAsync(points, {startIdx, lastIdx, fetchFn}) -> Promise<{order, source}>
+ *   optimizeRouteAsync(points, {startIdx, firstIdx, lastIdx, fetchFn}) -> Promise<{order, source}>
  *   buildMapsLinks(originLabel, orderedStops, {avoid}) -> [{label, url}]
  *   encodeShare(payload) / decodeShare(str) -> shareable '#r=...' links
  */
@@ -164,24 +164,35 @@ function pathCost(order, matrix) {
 function optimizeOrder(matrix, opts) {
   var o = opts || {};
   var start = (o.start === undefined || o.start === null) ? 0 : o.start;
+  var first = (o.first === undefined) ? null : o.first;
   var last = (o.last === undefined) ? null : o.last;
 
   var n = matrix ? matrix.length : 0;
   if (n === 0) return [];
   if (n === 1) return [0];
 
+  var pinnedFirst = first;
+  if (pinnedFirst === start) pinnedFirst = null;              /* degenerate -> no pin */
+  if (pinnedFirst !== null && (pinnedFirst < 0 || pinnedFirst >= n)) pinnedFirst = null;
   var pinned = last;
   if (pinned === start) pinned = null;              /* degenerate -> no pin */
   if (pinned !== null && (pinned < 0 || pinned >= n)) pinned = null;
+  if (pinnedFirst !== null && pinnedFirst === pinned) pinnedFirst = null; /* can't be both */
 
-  /* nearest-neighbor from `start`; pinned stop is visited last */
+  /* nearest-neighbor from `start`; the pinned-first stop is visited right
+   * after start, the pinned-last stop is visited last */
   var order = [start];
   var used = {};
   used[start] = true;
+  var cur = start;
+  if (pinnedFirst !== null) {
+    order.push(pinnedFirst);
+    used[pinnedFirst] = true;
+    cur = pinnedFirst;
+  }
   if (pinned !== null) used[pinned] = true;
 
   var target = (pinned === null) ? n : n - 1;
-  var cur = start;
   while (order.length < target) {
     var best = -1, bestD = Infinity;
     for (var i = 0; i < n; i++) {
@@ -198,13 +209,15 @@ function optimizeOrder(matrix, opts) {
   if (pinned !== null) order.push(pinned);
   for (var s = 0; s < n; s++) { if (!used[s]) order.push(s); } /* stragglers */
 
-  /* 2-opt improvement; keep start fixed at 0 and the pinned stop at the end */
+  /* 2-opt improvement; keep start fixed at 0, the pinned-first stop fixed at
+   * position 1, and the pinned-last stop fixed at the end */
+  var lo = (pinnedFirst !== null) ? 2 : 1;
   var endExclusive = (pinned !== null) ? order.length - 1 : order.length;
   var curCost = pathCost(order, matrix);
   var improved = true;
   while (improved) {
     improved = false;
-    for (var i = 1; i < endExclusive - 1 && !improved; i++) {
+    for (var i = lo; i < endExclusive - 1 && !improved; i++) {
       for (var j = i + 1; j < endExclusive; j++) {
         var cand = order.slice();
         for (var a = i, b = j; a < b; a++, b--) {
@@ -273,10 +286,11 @@ function buildDurationMatrix(points, fetchFn) {
 function optimizeRouteAsync(points, opts) {
   var o = opts || {};
   var startIdx = (o.startIdx === undefined || o.startIdx === null) ? 0 : o.startIdx;
+  var firstIdx = (o.firstIdx === undefined) ? null : o.firstIdx;
   var lastIdx = (o.lastIdx === undefined) ? null : o.lastIdx;
   return buildDurationMatrix(points, o.fetchFn).then(function (r) {
     return {
-      order: optimizeOrder(r.matrix, { start: startIdx, last: lastIdx }),
+      order: optimizeOrder(r.matrix, { start: startIdx, first: firstIdx, last: lastIdx }),
       source: r.source,
       matrix: r.matrix /* v1.4: exposed so callers can score any order */
     };
