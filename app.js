@@ -437,8 +437,9 @@
   $('mapsBtn').onclick = () => {
     const remaining = state.stops.filter((s) => !s.done);
     if (!remaining.length) { toast('No remaining stops'); return; }
-    const ordered = remaining.map((s) => ({ label: stopLabel(s) }));
-    if (settings.returnToStart) ordered.push({ label: originLabel() });
+    // pass the stop objects themselves — core.js stopLabel() builds the address text
+    const ordered = remaining.slice();
+    if (settings.returnToStart) ordered.push({ street: originLabel() });
     const avoid = [];
     if (settings.avoidTolls) avoid.push('tolls');
     if (settings.avoidHwy) avoid.push('highways');
