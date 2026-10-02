@@ -582,6 +582,9 @@ function simulateSchedule(order, durMin, ctx) {
  *      by slot, earliest window first.
  *   2. total lateness minutes across all violations.
  *   3. drive minutes.
+ *   4. window order penalty — for missed windows, earlier windows should
+ *      still come first in the route. A missed 11 AM appointment doesn't
+ *      get demoted to last; it stays ahead of later-window stops.
  * A scalar weight can never guarantee (1); this ordering does. */
 function scheduleCost(order, durMin, ctx) {
   var sim = simulateSchedule(order, durMin, ctx);
@@ -598,7 +601,24 @@ function scheduleCost(order, durMin, ctx) {
     lateMin += sim.violations[k].lateMin;
   }
   var misses = winIdx.map(function (i) { return missed[i] ? 1 : 0; });
+  // Window order penalty: for each pair of windowed stops where the earlier
+  // window appears AFTER the later window in the route, add a penalty
+  // proportional to the window gap. This keeps missed-window stops in
+  // earliest-window-first order instead of being shoved to the end.
+  var orderPenalty = 0;
+  var posOf = {};
+  for (var p = 0; p < order.length; p++) posOf[order[p]] = p;
+  for (var a = 0; a < winIdx.length; a++) {
+    for (var b = a + 1; b < winIdx.length; b++) {
+      var pa = posOf[winIdx[a]], pb = posOf[winIdx[b]];
+      if (pa === undefined || pb === undefined) continue;
+      if (pa > pb) {
+        orderPenalty += (ctx.windows[winIdx[b]].start - ctx.windows[winIdx[a]].start);
+      }
+    }
+  }
   return { misses: misses, lateMin: lateMin, driveMin: sim.driveMin,
+           orderPenalty: orderPenalty,
            violations: sim.violations, legs: sim.legs };
 }
 /* True if cost a is strictly better than cost b under the lexicographic order. */
@@ -609,6 +629,10 @@ function costLess(a, b) {
     if (am !== bm) return am < bm;
   }
   if (Math.abs(a.lateMin - b.lateMin) > 1e-9) return a.lateMin < b.lateMin;
+  // Window order beats drive time: a missed 11 AM stop stays ahead of a
+  // 2 PM stop even if the drive is longer. The commitment stands.
+  if (Math.abs((a.orderPenalty || 0) - (b.orderPenalty || 0)) > 1e-9)
+    return (a.orderPenalty || 0) < (b.orderPenalty || 0);
   return a.driveMin < b.driveMin - 1e-9;
 }
 
