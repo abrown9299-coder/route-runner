@@ -3,9 +3,10 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-200423';
+  const RR_BUILD = '20261002-201857';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
+  const LS_TRAFFIC = 'rr.traffic.learn.v1';
 
   const state = {
     stops: [],           // display order = route order
@@ -440,6 +441,18 @@
       if (s.done && state.checkedIn && state.checkedIn.stopId === s.id) {
         state.checkedIn = null; // service finished with the stop
       }
+      // Departure: start tracking the drive to the next stop for traffic learning.
+      if (s.done) {
+        const next = state.stops.find((x) => !x.done && x.lat != null);
+        if (next) {
+          // free-flow estimate from the last schedule, if available
+          const ff = (state.lastSchedule && state.lastSchedule.driveTo &&
+            state.lastSchedule.driveTo[next.id]) || 15;
+          startLegTracking(next, ff);
+        }
+      } else {
+        legTrack = null; // reopened — discard the leg
+      }
       // track completion: all stops done -> auto-delete next day
       if (state.stops.length && state.stops.every((x) => x.done)) {
         state.completedAt = Date.now();
@@ -468,6 +481,8 @@
         }
       } else {
         // one active service at a time: checking in here ends any other
+        // Arrival: end the tracked leg (traffic learning).
+        endLegTracking(s.id);
         state.checkedIn = { stopId: s.id, startedAt: Date.now() };
         toast('⏳ Checked in — ' + serviceMinFor(s) + ' min service timer running');
       }
@@ -921,6 +936,7 @@
         devicePos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         if (deviceDot && mapObj) deviceDot.setLatLng([devicePos.lat, devicePos.lng]);
         adoptDevicePos();
+        noteLegPosition(devicePos); // traffic learning: stationary detection
       }, () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 });
     } catch (e) {}
   }
@@ -931,6 +947,104 @@
       markDirty(); // recompute pre-estimate, save, re-render — no toast
       refreshMap();
     }
+  }
+
+  /* ---------- traffic learning: actual vs predicted drive times ----------
+   * Tracks each drive leg (stop completion -> next check-in). If the device
+   * sits stationary 5+ min mid-leg (gas station, restroom), the leg is
+   * discarded — it doesn't reflect traffic. Clean legs feed a per-area,
+   * per-time-of-day model that sharpens future estimates. */
+  let legTrack = null; // {departAt, fromLat, fromLng, toLat, toLng, freeFlowMin, stationaryMs, lastPos, lastMoveAt}
+  const STATIONARY_SPEED_MS = 1.0; // ~2.2 mph — below this counts as stopped
+  const STATIONARY_DISCARD_MS = 5 * 60 * 1000; // 5 min stopped mid-leg -> discard
+
+  function loadTrafficLearn() {
+    try {
+      const raw = localStorage.getItem(LS_TRAFFIC);
+      if (!raw) return { buckets: {} };
+      const d = JSON.parse(raw);
+      return d && d.buckets ? d : { buckets: {} };
+    } catch (e) { return { buckets: {} }; }
+  }
+  function saveTrafficLearn(d) {
+    try { localStorage.setItem(LS_TRAFFIC, JSON.stringify(d)); } catch (e) {}
+  }
+  /* Effective traffic factor closure for the optimizer: base pattern blended
+   * with learned data for this area + time. */
+  function makeTrafficFn() {
+    const learn = loadTrafficLearn();
+    const now = new Date();
+    const isWeekend = now.getDay() === 0 || now.getDay() === 6;
+    return (departMin, lat, lng) => {
+      return RouteCore.learnedTrafficFactorAt(departMin, isWeekend, learn, lat, lng);
+    };
+  }
+  function startLegTracking(toStop, freeFlowMin) {
+    if (!toStop || toStop.lat == null) return;
+    const from = devicePos || (state.origin.lat != null ? { lat: state.origin.lat, lng: state.origin.lng } : null);
+    legTrack = {
+      departAt: Date.now(),
+      fromLat: from ? from.lat : null, fromLng: from ? from.lng : null,
+      toLat: toStop.lat, toLng: toStop.lng,
+      toStopId: toStop.id,
+      freeFlowMin: freeFlowMin || 0,
+      stationaryMs: 0,
+      lastPos: devicePos ? { ...devicePos } : null,
+      lastPosAt: Date.now(),
+      lastMoveAt: Date.now(),
+    };
+  }
+  function noteLegPosition(pos) {
+    if (!legTrack || !pos) return;
+    const now = Date.now();
+    if (legTrack.lastPos) {
+      // haversine distance in meters
+      const R = 6371000;
+      const dLat = (pos.lat - legTrack.lastPos.lat) * Math.PI / 180;
+      const dLng = (pos.lng - legTrack.lastPos.lng) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 +
+        Math.cos(legTrack.lastPos.lat * Math.PI / 180) * Math.cos(pos.lat * Math.PI / 180) *
+        Math.sin(dLng / 2) ** 2;
+      const distM = 2 * R * Math.asin(Math.sqrt(a));
+      if (distM > 50) {
+        // moved significantly — reset the continuous-stationary clock.
+        // Stop-and-go traffic resets; a gas station stop doesn't.
+        legTrack.lastMoveAt = now;
+        legTrack.stationaryMs = 0;
+      } else {
+        legTrack.stationaryMs = now - legTrack.lastMoveAt;
+      }
+    }
+    legTrack.lastPos = { ...pos };
+    legTrack.lastPosAt = now;
+  }
+  function endLegTracking(arrivedStopId) {
+    if (!legTrack) return;
+    const leg = legTrack;
+    legTrack = null;
+    try {
+      // Only learn from legs that match: we arrived where we expected.
+      if (arrivedStopId !== leg.toStopId) return;
+      const actualMin = (Date.now() - leg.departAt) / 60000;
+      // Discard: stationary 5+ min mid-leg (gas station, restroom, errand).
+      if (leg.stationaryMs >= STATIONARY_DISCARD_MS) return;
+      // Discard: absurd ratios (GPS glitch, forgot to check in, etc.)
+      if (!leg.freeFlowMin || leg.freeFlowMin < 1) return;
+      const ratio = actualMin / leg.freeFlowMin;
+      if (ratio < 0.4 || ratio > 3.0) return;
+      // The ratio is actual / free-flow. But our base already includes the
+      // traffic factor — we want actual / (free * base) = learned adjustment.
+      // departMin for bucketing:
+      const departDate = new Date(leg.departAt);
+      const departMin = departDate.getHours() * 60 + departDate.getMinutes();
+      const isWeekend = departDate.getDay() === 0 || departDate.getDay() === 6;
+      const base = RouteCore.trafficFactorAt(departMin);
+      const adjustment = ratio / base;
+      const key = RouteCore.trafficBucketKey(departMin, isWeekend, leg.toLat, leg.toLng);
+      const learn = loadTrafficLearn();
+      RouteCore.recordTrafficSample(learn, key, adjustment);
+      saveTrafficLearn(learn);
+    } catch (e) { console.warn('traffic learn failed', e); }
   }
 
   async function fetchJson(url, opts, timeoutMs) {
@@ -1151,6 +1265,7 @@
         startIdx: Math.max(0, startIdx), firstIdx, lastIdx, fetchFn: fetch.bind(window),
         windows, serviceMin, departMin: departMin, bufferMin: 30,
         forceSchedule: !isWorkMode(), // personal mode: ETAs from pure drive time
+        trafficFn: makeTrafficFn(),
       });
       // before/after from the SAME matrix: apples-to-apples savings
       const beforeMin = RouteCore.routeMinutesForOrder(matrix, beforeOrder, source);
@@ -1182,7 +1297,7 @@
         state.earlyOpportunity = null;
         if (settings.earlySuggest !== false && schedule && windows.some(Boolean)) {
           try {
-            const simCtx = { windows, departMin, serviceMin, bufferMin: 30 };
+            const simCtx = { windows, departMin, serviceMin, bufferMin: 30, trafficFn: makeTrafficFn(), pointCoords: points.map((p) => ({ lat: p.lat, lng: p.lng })) };
             const opp = RouteCore.findEarlyArrivalOpportunity(order, durMin, simCtx);
             if (opp) {
               const earlyPt = points[opp.earlyStop];
@@ -1251,7 +1366,7 @@
         const newIds = ordered.map((s) => s.id).join(',');
         if (curIds === newIds) return false; // no reorder needed
         if (reoptDeclinedKey === reoptKey()) return false; // already said "keep as is"
-        const simCtx = { windows, departMin, serviceMin, bufferMin: 30 };
+        const simCtx = { windows, departMin, serviceMin, bufferMin: 30, trafficFn: makeTrafficFn(), pointCoords: points.map((p) => ({ lat: p.lat, lng: p.lng })) };
         const curSim = RouteCore.simulateSchedule(beforeOrder, durMin, simCtx);
         const late = (vs) => vs.reduce((a, v) => a + (v.lateMin || 0), 0);
         const nv = schedule.violations, cv = curSim.violations;
@@ -1261,7 +1376,7 @@
       const showReoptPrompt = () => {
         const names = [];
         try {
-          const simCtx = { windows, departMin, serviceMin, bufferMin: 30 };
+          const simCtx = { windows, departMin, serviceMin, bufferMin: 30, trafficFn: makeTrafficFn(), pointCoords: points.map((p) => ({ lat: p.lat, lng: p.lng })) };
           const curSim = RouteCore.simulateSchedule(beforeOrder, durMin, simCtx);
           curSim.violations.slice(0, 2).forEach((v) => {
             const pid = points[v.point] && points[v.point]._stopId;
@@ -1884,6 +1999,7 @@
       if (d < bestD) { bestD = d; best = s; }
     }
     if (best) {
+      endLegTracking(best.id); // arrival: traffic learning
       state.checkedIn = { stopId: best.id, startedAt: Date.now(), auto: true };
       save(); render();
       toast('📍 Auto checked in — ' + serviceMinFor(best) + ' min service timer running');
@@ -2215,7 +2331,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-200423' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-201857' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');

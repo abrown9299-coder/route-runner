@@ -499,6 +499,81 @@ function trafficFactorAt(departMin) {
   return 1.05;              /* late evening */
 }
 
+/* Learned traffic: bucket key for a departure time + destination area.
+ * 8 time buckets of 3 hours x weekday/weekend x geo cell (0.1° ~ 7x5.5 mi).
+ * Different Nashville areas learn different rush patterns — downtown peaks
+ * earlier than the suburbs, etc. */
+function trafficBucketKey(departMin, isWeekend, lat, lng) {
+  var t = ((departMin % 1440) + 1440) % 1440;
+  var bucket = Math.floor(t / 180); /* 0-7 */
+  var geo = '';
+  if (typeof lat === 'number' && typeof lng === 'number' && isFinite(lat) && isFinite(lng)) {
+    geo = '-' + Math.floor(lat * 10) + 'x' + Math.floor(lng * 10);
+  }
+  return (isWeekend ? 'we' : 'wd') + '-' + bucket + geo;
+}
+
+/* Blended traffic factor: base pattern + learned personal adjustment.
+ * learnData: {buckets: {key: {n, sum}}} where sum is sum of (actual/base).
+ * Uses Bayesian averaging: the base factor is the prior (weight 5), learned
+ * data shifts it as samples accumulate. Needs 3+ samples before the learned
+ * factor has real influence. */
+var LEARN_PRIOR_WEIGHT = 5;
+var LEARN_MIN_SAMPLES = 3;
+var LEARN_AGG_MIN_SAMPLES = 5;
+var LEARN_MAX_SAMPLES = 50; /* exponential decay beyond this */
+/* Hierarchical fallback:
+ * 1. Specific (time, day, area) bucket with 3+ samples
+ * 2. (time, day) aggregate across all areas with 5+ samples
+ * 3. Base factor */
+function learnedTrafficFactorAt(departMin, isWeekend, learnData, lat, lng) {
+  var base = trafficFactorAt(departMin);
+  if (!learnData || !learnData.buckets) return base;
+  var buckets = learnData.buckets;
+  // Level 1: specific bucket
+  var key = trafficBucketKey(departMin, isWeekend, lat, lng);
+  var b = buckets[key];
+  if (b && b.n >= LEARN_MIN_SAMPLES) {
+    return blendFactor(base, b);
+  }
+  // Level 2: aggregate across areas for this time+day
+  var t = ((departMin % 1440) + 1440) % 1440;
+  var bucket = Math.floor(t / 180);
+  var prefix = (isWeekend ? 'we' : 'wd') + '-' + bucket + '-';
+  var aggN = 0, aggSum = 0;
+  for (var k in buckets) {
+    if (k.indexOf(prefix) === 0 && buckets[k].n) {
+      aggN += buckets[k].n;
+      aggSum += buckets[k].sum;
+    }
+  }
+  if (aggN >= LEARN_AGG_MIN_SAMPLES) {
+    return blendFactor(base, { n: aggN, sum: aggSum });
+  }
+  return base;
+}
+function blendFactor(base, b) {
+  var learnedRatio = b.sum / b.n;
+  if (learnedRatio < 0.7) learnedRatio = 0.7;
+  if (learnedRatio > 1.6) learnedRatio = 1.6;
+  var wLearn = Math.min(b.n, LEARN_MAX_SAMPLES), wBase = LEARN_PRIOR_WEIGHT;
+  return base * ((learnedRatio * wLearn + 1.0 * wBase) / (wLearn + wBase));
+}
+/* Record a learning sample with exponential decay. */
+function recordTrafficSample(learnData, key, adjustment) {
+  if (!learnData.buckets) learnData.buckets = {};
+  var b = learnData.buckets[key] || { n: 0, sum: 0 };
+  if (b.n >= LEARN_MAX_SAMPLES) {
+    // decay: keep n at max, blend old sum down
+    b.sum = b.sum * (LEARN_MAX_SAMPLES - 1) / LEARN_MAX_SAMPLES + adjustment;
+  } else {
+    b.n += 1;
+    b.sum += adjustment;
+  }
+  learnData.buckets[key] = b;
+  return learnData;
+}
+
 function serviceMinAt(ctx, i) {
   var s = ctx ? ctx.serviceMin : null;
   var v;
@@ -527,7 +602,10 @@ function schedCtx(o, n) {
     serviceMin: o.serviceMin,
     bufferMin: (o.bufferMin !== null && o.bufferMin !== undefined) ? o.bufferMin : WINDOW_BUFFER_MIN,
     maxStart: maxStart,
-    anyWindow: anyWindow
+    anyWindow: anyWindow,
+    trafficFn: o.trafficFn,
+    pointCoords: o.pointCoords,
+    traffic: o.traffic
   };
 }
 
@@ -647,9 +725,14 @@ function simulateSchedule(order, durMin, ctx) {
     var baseDm = (d === null || d === undefined || !isFinite(d)) ? 1e9 : d;
     /* Traffic-aware: adjust for the time of day this leg is driven.
      * OSRM gives free-flow; this gets us to the average for that hour.
-     * Disable with ctx.traffic === false (tests). */
+     * Disable with ctx.traffic === false (tests). Use ctx.trafficFn(t)
+     * for a custom (e.g. learned) factor function. */
     var useTraffic = !c || c.traffic !== false;
-    var dm = (baseDm >= 1e9 || !useTraffic) ? baseDm : baseDm * trafficFactorAt(t);
+    var tfFn = (c && typeof c.trafficFn === 'function') ? c.trafficFn : trafficFactorAt;
+    var ptCoords = (c && c.pointCoords) || [];
+    var destCoord = ptCoords[cur] || {};
+    var dm = (baseDm >= 1e9 || !useTraffic) ? baseDm :
+      baseDm * tfFn(t, destCoord.lat, destCoord.lng);
     drive += dm;
     t += dm;
     var w = windows[cur];
@@ -904,13 +987,18 @@ function optimizeRouteAsync(points, opts) {
   var lastIdx = (o.lastIdx === undefined) ? null : o.lastIdx;
   return buildDurationMatrix(points, o.fetchFn).then(function (r) {
     var durMin = minutesMatrix(r.matrix, r.source);
+    var pointCoords = (points || []).map(function (p) {
+      return p ? { lat: p.lat, lng: p.lng } : {};
+    });
     var order = optimizeOrder(r.matrix, {
       start: startIdx, first: firstIdx, last: lastIdx,
       windows: o.windows, durMin: durMin, source: r.source,
-      departMin: o.departMin, serviceMin: o.serviceMin, bufferMin: o.bufferMin
+      departMin: o.departMin, serviceMin: o.serviceMin, bufferMin: o.bufferMin,
+      trafficFn: o.trafficFn, pointCoords: pointCoords
     });
     var sctx = schedCtx({ windows: o.windows, departMin: o.departMin,
-                          serviceMin: o.serviceMin, bufferMin: o.bufferMin },
+                          serviceMin: o.serviceMin, bufferMin: o.bufferMin,
+                          trafficFn: o.trafficFn, pointCoords: pointCoords },
                         r.matrix.length);
     return {
       order: order,
@@ -1146,7 +1234,10 @@ var RouteCore = {
   scheduleCost: scheduleCost,
   costLess: costLess,
   findEarlyArrivalOpportunity: findEarlyArrivalOpportunity,
-  trafficFactorAt: trafficFactorAt
+  trafficFactorAt: trafficFactorAt,
+  trafficBucketKey: trafficBucketKey,
+  learnedTrafficFactorAt: learnedTrafficFactorAt,
+  recordTrafficSample: recordTrafficSample
 };
 
 if (typeof module !== 'undefined' && module.exports) {
