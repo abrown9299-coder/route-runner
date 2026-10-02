@@ -1,6 +1,9 @@
 /* RouteRunner app.js — UI wiring. Pure-algorithm work lives in core.js (window.RouteCore). */
 (function () {
   'use strict';
+  // Stamped by deploy.py. If this ever disagrees with the index.html meta
+  // version at boot, the JS is stale and we force a clean reload.
+  const RR_BUILD = '20261002-044919';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -2047,6 +2050,18 @@
    * build — route data (already in localStorage) plus UI state are restored.
    * Offline or failed check = silent no-op. */
   const APP_VERSION = (document.querySelector('meta[name="app-version"]') || {}).content || 'dev';
+  // Self-healing: if the loaded JS build doesn't match the page build,
+  // Safari served a stale app.js — force a cache-busting reload once.
+  try {
+    if (RR_BUILD && RR_BUILD !== '20261002-044919' && APP_VERSION && APP_VERSION !== 'dev' &&
+        RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
+        !sessionStorage.getItem('rr.selfheal')) {
+      sessionStorage.setItem('rr.selfheal', '1');
+      const u = new URL(location.href);
+      u.searchParams.set('v', APP_VERSION);
+      location.replace(u.toString());
+    }
+  } catch (e) {}
   const UI_KEY = 'rr.ui.v1';
   function saveUIState() {
     try {
