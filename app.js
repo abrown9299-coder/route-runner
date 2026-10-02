@@ -640,7 +640,15 @@
         $('ocrStatus').textContent = 'Reading image ' + (i + 1) + ' of ' + files.length + '…';
         try {
           const text = await RR_OCR.recognize(files[i]);
-          const parsed = RouteCore.parseOcrText(text);
+          // schedule format first (work); fall back to freeform addresses
+          // (notes, GPS apps) — works in both Personal and Work mode
+          let parsed = RouteCore.parseOcrText(text);
+          if (!parsed.length) {
+            parsed = RouteCore.parseFreeformAddresses(text).map((p) => ({
+              street: p.street, city: p.city, state: p.state, zip: p.zip,
+              jobType: '', apptMin: null,
+            }));
+          }
           parsed.forEach((p) => all.push({
             id: uid(), street: p.street, city: p.city, state: p.state, zip: p.zip,
             jobType: p.jobType || '', note: '', lat: null, lng: null, geocodeSource: null,

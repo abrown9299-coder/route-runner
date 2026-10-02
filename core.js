@@ -39,6 +39,43 @@
  */
 var CITY_ZIP_RE = /^(.+?),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?$/;
 var STREET_RE = /^\d+\s+[A-Za-z]/;
+
+/* Freeform address extractor for screenshots of notes, GPS apps, etc.
+ * Finds street addresses anywhere in the text, not just schedule format.
+ * Returns [{street, city, state, zip}] — no job types, times, or names. */
+function parseFreeformAddresses(text) {
+  var lines = String(text == null ? '' : text)
+    .split(/\r?\n/)
+    .map(function (l) { return l.trim(); })
+    .filter(function (l) { return l.length > 0; });
+  var out = [];
+  var seen = {};
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    // single-line: "123 Main St, Nashville, TN 37201"
+    var full = line.match(/^(\d+\s+[A-Za-z0-9\s.'-]+?),\s*(.+?),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?$/);
+    if (full) {
+      var key = full[1] + '|' + full[4];
+      if (!seen[key]) {
+        seen[key] = true;
+        out.push({ street: full[1].trim(), city: full[2].trim(), state: full[3], zip: full[4] });
+      }
+      continue;
+    }
+    // multi-line: street on one line, "City, ST ZIP" on the next
+    if (STREET_RE.test(line) && i + 1 < lines.length) {
+      var cm = lines[i + 1].match(CITY_ZIP_RE);
+      if (cm) {
+        var key2 = line + '|' + cm[3];
+        if (!seen[key2]) {
+          seen[key2] = true;
+          out.push({ street: line, city: cm[1].trim(), state: cm[2], zip: cm[3] });
+        }
+      }
+    }
+  }
+  return out;
+}
 var TIME_RE = /^\d{1,2}:\d{2}/;
 
 /* "9:00 AM" -> 540, "2:30pm" -> 870, "14:30" -> 870, garbage -> null. */
@@ -762,6 +799,7 @@ function decodeShare(str) {
 
 var RouteCore = {
   parseOcrText: parseOcrText,
+  parseFreeformAddresses: parseFreeformAddresses,
   normalizeStop: normalizeStop,
   dedupeStops: dedupeStops,
   haversineMi: haversineMi,
