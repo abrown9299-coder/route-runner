@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-052740';
+  const RR_BUILD = '20261002-111637';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -691,8 +691,18 @@
           '<small>' + esc([p.city, p.state].filter(Boolean).join(', ')) + '</small>';
         li.onclick = () => {
           const [lng, lat] = f.geometry.coordinates;
+          // Preserve house number from query if Photon result lacks it.
+          const qNum = (q.match(/^\d+/) || [])[0] || '';
+          let pStreet = [p.housenumber, p.street].filter(Boolean).join(' ') ||
+                        [p.name, p.street].filter(Boolean).join(' ') || label;
+          if (qNum && pStreet && !new RegExp('^' + qNum + '\\b').test(pStreet)) {
+            const qStreet = q.replace(/^\d+\s+/, '').toLowerCase();
+            if (pStreet.toLowerCase().includes(qStreet.split(' ')[0])) {
+              pStreet = qNum + ' ' + pStreet;
+            }
+          }
           addStops([{
-            id: uid(), street: [p.name, p.street].filter(Boolean).join(' ') || label,
+            id: uid(), street: pStreet,
             city: p.city || '', state: p.state || '', zip: p.postcode || '',
             jobType: '', note: '', lat, lng, geocodeSource: 'search',
             done: false, isLast: false, isFirst: false, confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
@@ -1572,7 +1582,16 @@
           '<small>' + esc([p.city, p.state].filter(Boolean).join(', ')) + '</small>';
         li.onclick = () => {
           const [lng, lat] = f.geometry.coordinates;
-          state.origin = { type: 'address', label: label, lat, lng };
+          // Preserve house number from query if Photon result lacks it.
+          const qNum = (q.match(/^\d+/) || [])[0] || '';
+          let oLabel = label;
+          if (qNum && !new RegExp('^' + qNum + '\\b').test(oLabel)) {
+            const qStreet = q.replace(/^\d+\s+/, '').toLowerCase();
+            if (oLabel.toLowerCase().includes(qStreet.split(' ')[0])) {
+              oLabel = qNum + ' ' + oLabel;
+            }
+          }
+          state.origin = { type: 'address', label: oLabel, lat, lng };
           $('originSheet').hidden = true;
           markDirty('Start updated');
         };
@@ -1874,8 +1893,19 @@
             li.innerHTML = esc(label || 'Unnamed place') +
               '<small>' + esc([p.city, p.state].filter(Boolean).join(', ')) + '</small>';
             li.onclick = () => {
-              const street = [p.name, p.street].filter(Boolean).join(' ') ||
-                             [p.housenumber, p.street].filter(Boolean).join(' ');
+              // Preserve the house number from the query if the result lacks one.
+              // Photon often returns street-only results; the user typed the number.
+              const qNum = (q.match(/^\d+/) || [])[0] || '';
+              let street = [p.housenumber, p.street].filter(Boolean).join(' ');
+              if (!street) street = [p.name, p.street].filter(Boolean).join(' ');
+              if (qNum && street && !new RegExp('^' + qNum + '\\b').test(street)) {
+                // Result has a street but no house number — prepend the typed one.
+                // Only if the street name matches what was typed (avoid wrong numbers).
+                const qStreet = q.replace(/^\d+\s+/, '').toLowerCase();
+                if (street.toLowerCase().includes(qStreet.split(' ')[0])) {
+                  street = qNum + ' ' + street;
+                }
+              }
               const addr = [street, p.city,
                             [p.state, p.postcode].filter(Boolean).join(' ')]
                 .filter(Boolean).join(', ');
@@ -2063,7 +2093,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-052740' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-111637' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
