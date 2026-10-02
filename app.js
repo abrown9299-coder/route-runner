@@ -1587,12 +1587,19 @@
     if (now - lastUpdateCheck < 30000) return; // throttle foreground checks
     lastUpdateCheck = now;
     if (typeof fetch !== 'function') return;
+    // If a previous update attempt stalled (flag set but no reload in 30s),
+    // clear the flag so we retry instead of staying stuck.
+    const updatingSince = Number(ssGet('rr.updating_at') || 0);
+    if (ssGet('rr.updating') && updatingSince && now - updatingSince > 30000) {
+      ssDel('rr.updating'); ssDel('rr.updating_at');
+    }
     fetch('version.json', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .then((info) => {
         if (!info || !info.version) return;
-        if (info.version === APP_VERSION) { ssDel('rr.updating'); return; }
+        if (info.version === APP_VERSION) { ssDel('rr.updating'); ssDel('rr.updating_at'); return; }
         if (ssGet('rr.updating')) return;
+        ssSet('rr.updating_at', String(Date.now()));
         // Give a just-resumed webview a beat to settle before navigating away.
         setTimeout(() => applyUpdate(info.version), 1500);
       })
@@ -1608,25 +1615,41 @@
     } catch (e) {}
     saveUIState();
     toast('Updating to the latest version…');
-    const getReg = ('serviceWorker' in navigator) && navigator.serviceWorker.getRegistration
-      ? navigator.serviceWorker.getRegistration().catch(() => null)
-      : Promise.resolve(null);
-    Promise.resolve(getReg).then((reg) => {
-      if (reg && typeof reg.update === 'function') {
-        let done = false;
-        const finish = () => { if (!done) { done = true; location.reload(); } };
-        if (navigator.serviceWorker.addEventListener) {
-          navigator.serviceWorker.addEventListener('controllerchange', finish, { once: true });
-        }
-        reg.update().catch(() => {});
-        setTimeout(finish, 8000); // fallback if the worker stalls
-      } else {
-        // No service worker control: cache-busting reload, param stripped on boot.
+    let done = false;
+    const finish = () => { if (!done) { done = true; location.reload(); } };
+    const cacheBust = () => {
+      if (done) return; done = true;
+      try {
         const u = new URL(location.href);
         u.searchParams.set('v', serverVersion);
         location.href = u.toString();
-      }
-    });
+      } catch (e) { location.reload(); }
+    };
+    // Try the service-worker path first, but don't wait long — fall back to
+    // a cache-busting reload quickly so the update never stalls.
+    try {
+      const getReg = ('serviceWorker' in navigator) && navigator.serviceWorker.getRegistration
+        ? navigator.serviceWorker.getRegistration().catch(() => null)
+        : Promise.resolve(null);
+      Promise.resolve(getReg).then((reg) => {
+        if (reg && typeof reg.update === 'function') {
+          if (navigator.serviceWorker.addEventListener) {
+            navigator.serviceWorker.addEventListener('controllerchange', finish, { once: true });
+          }
+          reg.update().catch(() => {});
+          setTimeout(finish, 3000); // SW is slow or stalled -> force reload
+        } else {
+          // No service worker: cache-busting reload, param stripped on boot.
+          cacheBust();
+        }
+      }).catch(cacheBust);
+      // Absolute backstop: if the promise chain itself stalls, reload anyway.
+      setTimeout(finish, 5000);
+    } catch (e) {
+      cacheBust();
+    }
+    // Final backstop if reload was blocked.
+    setTimeout(cacheBust, 6000);
   }
 
   /* ---------- boot ---------- */
