@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-045636';
+  const RR_BUILD = '20261002-045936';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -646,8 +646,7 @@
       const hasHouseNum = /^\d+\s+\S/.test(q);
       // Census exact match: run in parallel with Photon, show first.
       const censusP = hasHouseNum
-        ? fetch('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
-            '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json')
+        ? fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=' + encodeURIComponent(q + ', Nashville, TN'))
             .then((r) => r.json()).catch(() => null)
         : Promise.resolve(null);
       const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
@@ -655,24 +654,25 @@
       const [cj, j] = await Promise.all([censusP, photonP]);
       if (myToken !== searchToken) return; // stale — user kept typing
       list.innerHTML = '';
-      // Census exact match FIRST.
-      const cm = cj && cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
-      if (cm) {
-        const a = cm.addressComponents || {};
-        const street = [(a.fromAddress || a.number || ''),
-                        (a.streetName || a.street || ''),
-                        (a.suffixType || '')].filter(Boolean).join(' ');
+      // Nominatim exact match FIRST (CORS-friendly, has house numbers).
+      const nm = cj && cj[0];
+      if (nm && nm.address && nm.address.house_number) {
+        const a = nm.address;
+        const street = [(a.house_number || ''), (a.road || '')].filter(Boolean).join(' ');
+        const city = a.city || a.town || a.village || 'Nashville';
+        // Clean display: "2720 Eugenia Avenue, Nashville, TN 37211"
+        const cleanAddr = [street, city, 'TN ' + (a.postcode || '')].filter(Boolean).join(', ');
         const li = document.createElement('li');
-        li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
+        li.innerHTML = '✓ <b>' + esc(cleanAddr) + '</b><small>Exact address match</small>';
         li.onclick = () => {
           addStops([{
             id: uid(),
             street: street || q,
-            city: (a.city || 'Nashville'),
-            state: 'TN', zip: a.zip || '',
+            city: city,
+            state: 'TN', zip: a.postcode || '',
             jobType: '', note: '',
-            lat: cm.coordinates.y, lng: cm.coordinates.x,
-            geocodeSource: 'census-manual',
+            lat: parseFloat(nm.lat), lng: parseFloat(nm.lon),
+            geocodeSource: 'nominatim-exact',
             done: false, isLast: false, isFirst: false,
             confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
           }]);
@@ -851,15 +851,16 @@
   }
 
   async function geocodeCensusOne(s) {
-    // US Census one-shot geocoder: authoritative, free, no key.
+    // Nominatim one-shot geocoder: free, no key, CORS-friendly.
+    // (US Census API doesn't send CORS headers, so browsers block it.)
     const q = encodeURIComponent(stopLabel(s));
     const r = await fetch(
-      'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
-      '?address=' + q + '&benchmark=2020&format=json');
+      'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + q,
+      { headers: { 'Accept': 'application/json' } });
     const j = await r.json();
-    const m = j.result && j.result.addressMatches && j.result.addressMatches[0];
-    if (m && m.coordinates) {
-      s.lng = m.coordinates.x; s.lat = m.coordinates.y; s.geocodeSource = 'census-one';
+    const m = j && j[0];
+    if (m && m.lat && m.lon) {
+      s.lng = parseFloat(m.lon); s.lat = parseFloat(m.lat); s.geocodeSource = 'nominatim-one';
       return true;
     }
     return false;
@@ -1535,8 +1536,7 @@
       list.innerHTML = '';
       const hasHouseNum = /^\d+\s+\S/.test(q);
       const censusP = hasHouseNum
-        ? fetch('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
-            '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json')
+        ? fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=' + encodeURIComponent(q + ', Nashville, TN'))
             .then((r) => r.json()).catch(() => null)
         : Promise.resolve(null);
       const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
@@ -1544,15 +1544,18 @@
       const [cj, j] = await Promise.all([censusP, photonP]);
       if (myToken !== originSearchToken) return; // stale
       list.innerHTML = '';
-      const cm = cj && cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
-      if (cm) {
+      const nm = cj && cj[0];
+      if (nm && nm.address && nm.address.house_number) {
+        const a = nm.address;
+        const street = [(a.house_number || ''), (a.road || '')].filter(Boolean).join(' ');
+        const cleanAddr = [street, (a.city || a.town || a.village || 'Nashville')].filter(Boolean).join(', ');
         const li = document.createElement('li');
-        li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
+        li.innerHTML = '✓ <b>' + esc(cleanAddr) + '</b><small>Exact address match</small>';
         li.onclick = () => {
           state.origin = {
             type: 'address',
-            label: cm.matchedAddress.split(',').slice(0, 2).join(','),
-            lat: cm.coordinates.y, lng: cm.coordinates.x,
+            label: cleanAddr,
+            lat: parseFloat(nm.lat), lng: parseFloat(nm.lon),
           };
           $('originSheet').hidden = true;
           markDirty('Start updated');
@@ -1842,21 +1845,23 @@
           const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
             '&limit=6&lat=36.1627&lon=-86.7816').then((r) => r.json()).catch(() => null);
           const censusP = hasHouseNum
-            ? fetch('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
-                '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json')
+            ? fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=' + encodeURIComponent(q + ', Nashville, TN'))
                 .then((r) => r.json()).catch(() => null)
             : Promise.resolve(null);
           const [pj, cj] = await Promise.all([photonP, censusP]);
           // Stale response guard: if the user kept typing, drop this result.
           if (timer._tok !== myToken) return;
           list.innerHTML = '';
-          // Census exact match FIRST.
-          const cm = cj && cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
-          if (cm) {
+          // Nominatim exact match FIRST.
+          const nm = cj && cj[0];
+          if (nm && nm.address && nm.address.house_number) {
+            const a = nm.address;
+            const street = [(a.house_number || ''), (a.road || '')].filter(Boolean).join(' ');
+            const cleanAddr = [street, (a.city || a.town || a.village || 'Nashville'), 'TN ' + (a.postcode || '')].filter(Boolean).join(', ');
             const li = document.createElement('li');
-            li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
+            li.innerHTML = '✓ <b>' + esc(cleanAddr) + '</b><small>Exact address match</small>';
             li.onclick = () => {
-              $(inputId).value = cm.matchedAddress;
+              $(inputId).value = cleanAddr;
               list.hidden = true;
             };
             list.appendChild(li);
@@ -2058,7 +2063,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-045636' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-045936' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
