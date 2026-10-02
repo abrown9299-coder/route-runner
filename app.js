@@ -635,7 +635,39 @@
         };
         list.appendChild(li);
       });
-      list.hidden = !(j.features || []).length;
+      // "Use what I typed" — Photon often lacks house numbers; Nominatim
+      // usually has the full address. Geocode the raw text directly.
+      if (q.match(/^\d+\s+\S/)) {
+        const li = document.createElement('li');
+        li.innerHTML = '➕ <b>Use "' + esc(q) + '"</b><small>Look up this exact address</small>';
+        li.onclick = async () => {
+          toast('Looking up address…');
+          try {
+            const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
+              encodeURIComponent(q + ', Nashville, TN');
+            const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+            const j = await r.json();
+            if (!j.length) { toast('Could not find that address'); return; }
+            const a = j[0].address || {};
+            addStops([{
+              id: uid(),
+              street: [a.house_number, a.road].filter(Boolean).join(' ') || q,
+              city: a.city || a.town || a.village || 'Nashville',
+              state: a.state_code || 'TN', zip: a.postcode || '',
+              jobType: '', note: '',
+              lat: parseFloat(j[0].lat), lng: parseFloat(j[0].lon),
+              geocodeSource: 'nominatim-manual',
+              done: false, isLast: false, isFirst: false,
+              confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
+            }]);
+            $('searchInput').value = '';
+            list.hidden = true;
+            toast('✓ Stop added');
+          } catch (e) { toast('Lookup failed — are you online?'); }
+        };
+        list.appendChild(li);
+      }
+      list.hidden = !(j.features || []).length && !q.match(/^\d+\s+\S/);
     } catch (e) { /* offline — suggestions unavailable */ }
   }
   document.addEventListener('click', (e) => {
@@ -1344,7 +1376,29 @@
         };
         list.appendChild(li);
       });
-      list.hidden = !(j.features || []).length;
+      if (q.match(/^\d+\s+\S/)) {
+        const li = document.createElement('li');
+        li.innerHTML = '➕ <b>Use "' + esc(q) + '"</b><small>Look up this exact address</small>';
+        li.onclick = async () => {
+          toast('Looking up address…');
+          try {
+            const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
+              encodeURIComponent(q + ', Nashville, TN');
+            const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+            const j = await r.json();
+            if (!j.length) { toast('Could not find that address'); return; }
+            state.origin = {
+              type: 'address', label: j[0].display_name.split(',').slice(0, 2).join(','),
+              lat: parseFloat(j[0].lat), lng: parseFloat(j[0].lon),
+            };
+            $('originSheet').hidden = true;
+            markDirty('Start updated');
+            toast('✓ Start updated');
+          } catch (e) { toast('Lookup failed — are you online?'); }
+        };
+        list.appendChild(li);
+      }
+      list.hidden = !(j.features || []).length && !q.match(/^\d+\s+\S/);
     } catch (e) { /* offline — suggestions unavailable */ }
   }
   document.addEventListener('click', (e) => {
