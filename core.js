@@ -74,9 +74,10 @@ function parseTimeWindow(s) {
 }
 
 /* "3-5" style short window: given the appointment hour, "3-5" means 3 PM - 5 PM.
- * Returns {start, end} or null. The apptMin provides the AM/PM context. */
+ * Returns {start, end} or null. The apptMin provides the AM/PM context.
+ * Finds the pattern anywhere in the line (OCR often merges it with the street). */
 function parseShortWindow(s, apptMin) {
-  var m = String(s).match(/^\s*(\d{1,2})\s*[-\u2013\u2014]\s*(\d{1,2})\s*$/);
+  var m = String(s).match(/\b(\d{1,2})\s*[-\u2013\u2014]\s*(\d{1,2})\b/);
   if (!m || apptMin == null) return null;
   var sh = Number(m[1]), eh = Number(m[2]);
   // The window start hour should match the appointment hour (12h clock).
@@ -292,7 +293,8 @@ function parseOcrText(text) {
       timeLineIdx = streetLineIdx;
       // strip the time from the street so geocoding isn't polluted
       street = street.replace(/\s*\b\d{1,2}:\d{2}\s*[APap]\.?\s*[Mm]\.?\b/, '')
-                     .replace(/\s*\b\d{1,2}\s*[APap]\.?\s*[Mm]\.?\b/, '').trim();
+                     .replace(/\s*\b\d{1,2}\s*[APap]\.?\s*[Mm]\.?\b/, '')
+                     .replace(/\s*\b\d{1,2}\s*[-\u2013\u2014]\s*\d{1,2}\b/, '').trim();
     } else {
       // Search lines above the street
       for (var t = k - 1; t > prevCity; t--) {
@@ -321,7 +323,12 @@ function parseOcrText(text) {
     if (apptMin != null && twEnd == null) {
       for (var wl = blockStart; wl <= Math.min(i + 1, lines.length - 1); wl++) {
         var sw = parseShortWindow(lines[wl], apptMin);
-        if (sw) { twEnd = sw.end; locked = true; break; }
+        if (sw) {
+          twEnd = sw.end; locked = true;
+          // Strip the window from the street if it was merged there.
+          street = street.replace(/\s*\b\d{1,2}\s*[-\u2013\u2014]\s*\d{1,2}\b/, '').trim();
+          break;
+        }
       }
     }
 
