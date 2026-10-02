@@ -207,6 +207,21 @@ function parseOcrText(text) {
     .map(function (l) { return l.trim(); })
     .filter(function (l) { return l.length > 0; });
 
+  /* Merge split city/ZIP lines: "Nashville, TN" + "37209-4655"
+   * -> "Nashville, TN 37209-4655". Some schedule apps wrap the ZIP. */
+  var merged = [];
+  for (var mi = 0; mi < lines.length; mi++) {
+    var cur = lines[mi];
+    var nxt = lines[mi + 1] || '';
+    if (/^(.+?),\s*([A-Z]{2})$/.test(cur) && /^\d{5}(?:-\d{4})?$/.test(nxt)) {
+      merged.push(cur + ' ' + nxt);
+      mi++; // skip the ZIP line
+    } else {
+      merged.push(cur);
+    }
+  }
+  lines = merged;
+
   var out = [];
   var seen = {}; // dedupe by street+zip across formats
 
