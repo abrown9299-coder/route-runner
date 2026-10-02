@@ -1749,7 +1749,6 @@
     saveUIState();
     toast('Updating to the latest version…');
     let done = false;
-    const finish = () => { if (!done) { done = true; location.reload(); } };
     const cacheBust = () => {
       if (done) return; done = true;
       try {
@@ -1758,31 +1757,19 @@
         location.href = u.toString();
       } catch (e) { location.reload(); }
     };
-    // Try the service-worker path first, but don't wait long — fall back to
-    // a cache-busting reload quickly so the update never stalls.
+    // The old SW serves stale cached files on plain reload. Unregister all
+    // workers first, then cache-bust — guarantees the new shell loads.
     try {
-      const getReg = ('serviceWorker' in navigator) && navigator.serviceWorker.getRegistration
-        ? navigator.serviceWorker.getRegistration().catch(() => null)
-        : Promise.resolve(null);
-      Promise.resolve(getReg).then((reg) => {
-        if (reg && typeof reg.update === 'function') {
-          if (navigator.serviceWorker.addEventListener) {
-            navigator.serviceWorker.addEventListener('controllerchange', finish, { once: true });
-          }
-          reg.update().catch(() => {});
-          setTimeout(finish, 3000); // SW is slow or stalled -> force reload
-        } else {
-          // No service worker: cache-busting reload, param stripped on boot.
-          cacheBust();
-        }
-      }).catch(cacheBust);
-      // Absolute backstop: if the promise chain itself stalls, reload anyway.
-      setTimeout(finish, 5000);
+      const unreg = ('serviceWorker' in navigator) && navigator.serviceWorker.getRegistrations
+        ? navigator.serviceWorker.getRegistrations()
+            .then((regs) => Promise.all(regs.map((r) => r.unregister().catch(() => {}))))
+            .catch(() => {})
+        : Promise.resolve();
+      Promise.resolve(unreg).then(cacheBust).catch(cacheBust);
+      setTimeout(cacheBust, 4000); // backstop if unregistration stalls
     } catch (e) {
       cacheBust();
     }
-    // Final backstop if reload was blocked.
-    setTimeout(cacheBust, 6000);
   }
 
   /* ---------- boot ---------- */
