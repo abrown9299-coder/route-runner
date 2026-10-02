@@ -1384,7 +1384,11 @@
       const info = resp.ok ? await resp.json() : null;
       if (!info || !info.version) { toast('Could not check — try again'); return; }
       if (info.version === APP_VERSION) {
-        toast('✓ You are on the newest version');
+        // Versions match, but the JS may still be stale (Safari caches
+        // app.js aggressively). Force a clean reload to be sure.
+        toast('Refreshing to the newest code…');
+        ssDel('rr.updating'); ssDel('rr.updating_at');
+        applyUpdate(info.version);
       } else {
         // Clear the stale-update guard so the update always runs.
         ssDel('rr.updating'); ssDel('rr.updating_at');
