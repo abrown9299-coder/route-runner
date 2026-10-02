@@ -1233,14 +1233,16 @@
     if (settings.avoidTolls) avoid.push('tolls');
     if (settings.avoidHwy) avoid.push('highways');
     const legs = RouteCore.buildMapsLinks(originLabel(), ordered, { avoid });
-    if (legs.length === 1) { window.open(legs[0].url, '_blank'); return; }
+    // Navigate the app itself (not a popup) so the browser back button
+    // returns directly to RouteRunner — no intermediate blank page.
+    if (legs.length === 1) { location.href = legs[0].url; return; }
     const box = $('legList');
     box.innerHTML = '';
     legs.forEach((leg) => {
       const b = document.createElement('button');
       b.className = 'btn leg-btn';
       b.innerHTML = '🗺️ ' + esc(leg.label);
-      b.onclick = () => window.open(leg.url, '_blank');
+      b.onclick = () => { location.href = leg.url; };
       box.appendChild(b);
     });
     $('legSheet').hidden = false;
