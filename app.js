@@ -1377,7 +1377,7 @@
   };
 
   /* ---------- diagnostics download (developer mode) ---------- */
-  $('diagBtn').onclick = () => {
+  $('diagBtn').onclick = async () => {
     const diag = {
       app: 'RouteRunner',
       version: APP_VERSION,
@@ -1410,14 +1410,21 @@
       },
       errors: (window.__rrErrors || []).slice(-20),
     };
-    const blob = new Blob([JSON.stringify(diag, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'routerunner-diagnostics-' + Date.now() + '.json';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-    toast('Diagnostics downloaded — send it to Vesper');
+    const text = JSON.stringify(diag, null, 2);
+    const fname = 'routerunner-diagnostics-' + Date.now() + '.json';
+    const file = new File([text], fname, { type: 'application/json' });
+    // In the installed app there's no Safari downloader — use the native
+    // share sheet so Aaron can "Save to Files".
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'RouteRunner diagnostics' });
+        return;
+      }
+    } catch (e) { /* user dismissed — fall through */ }
+    // Fallback: show it for manual copy.
+    const w = window.open('', '_blank');
+    if (w) { w.document.write('<pre>' + esc(text) + '</pre>'); }
+    else { toast('Sharing not available on this device'); }
   };
   // Capture JS errors for diagnostics.
   window.__rrErrors = window.__rrErrors || [];
