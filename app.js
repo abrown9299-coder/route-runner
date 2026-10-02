@@ -22,9 +22,10 @@
   };
   const settings = {
     defaultStart: '', avoidTolls: false, avoidHwy: false,
-    returnToStart: false, saveHistory: false,
+    returnToStart: false, saveHistory: false, mode: 'work', // 'work' | 'personal'
     serviceTimes: { default: 45, byJobType: {}, known: [] },
   };
+  const isWorkMode = () => settings.mode !== 'personal';
 
   /* ---------- persistence ---------- */
   function save() {
@@ -51,6 +52,7 @@
         for (const k of Object.keys(settings)) {
           if (s[k] !== undefined && typeof s[k] === typeof settings[k]) settings[k] = s[k];
         }
+        if (settings.mode !== 'work' && settings.mode !== 'personal') settings.mode = 'work';
       }
       const r = JSON.parse(localStorage.getItem(LS_ROUTE) || 'null');
       if (r) {
@@ -99,6 +101,40 @@
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  /* ---------- install gate (v1.9.2): the app must run installed ----------
+   * The inline script in index.html already showed #installGate when not
+   * standalone; here we fill in the platform-specific steps. There is no
+   * dismiss — the gate stays until the app is opened from the home screen. */
+  (function installGateSteps() {
+    let standalone = false;
+    try {
+      standalone = window.matchMedia('(display-mode: standalone)').matches ||
+                   window.navigator.standalone === true;
+    } catch (e) {}
+    if (standalone) return;
+    const ua = String(navigator.userAgent || '');
+    const isIOS = /iPad|iPhone|iPod/.test(ua);
+    const isAndroid = /Android/.test(ua);
+    const steps = isIOS ? [
+      'Tap the Share button at the bottom of Safari (the box with an arrow pointing up).',
+      'Scroll down and tap "Add to Home Screen".',
+      'Tap "Add" in the top-right corner.',
+      'Open RouteRunner from your home screen — you only have to do this once.',
+    ] : isAndroid ? [
+      'Tap the ⋮ menu in the top-right corner of the browser.',
+      'Tap "Install app" (or "Add to Home screen").',
+      'Open RouteRunner from your home screen — you only have to do this once.',
+    ] : [
+      'Open this page on your phone.',
+      'iPhone: Share → Add to Home Screen. Android: ⋮ menu → Install app.',
+      'Open RouteRunner from your home screen — you only have to do this once.',
+    ];
+    const box = $('installSteps');
+    if (box) box.innerHTML = steps.map((s) => '<li>' + esc(s) + '</li>').join('');
+    const gate = $('installGate');
+    if (gate) gate.hidden = false; // belt-and-braces: the inline script should have shown it already
+  })();
   function stopLabel(s) {
     const a = [s.street, s.city, s.state && s.zip ? s.state + ' ' + s.zip : (s.state || s.zip)]
       .filter(Boolean).join(', ').replace(/,(\s*,)+/g, ',').trim();
@@ -222,34 +258,35 @@
       li.className = 'stop' + (s.done ? ' done' : '') + (s.isLast ? ' is-last' : '') + (s.isFirst ? ' is-first' : '');
       li.dataset.id = s.id;
       const needsPin = s.lat == null || s.lng == null;
+      const work = isWorkMode(); // personal mode hides confirmed/check-in/notes/job types
       li.innerHTML =
         '<span class="drag" title="Drag to reorder">⠿</span>' +
         '<span class="num">' + (s.isFirst ? '🚩' : (s.isLast ? '🏁' : (i + 1))) + '</span>' +
         '<div class="info"><div class="addr">' + esc(stopLabel(s)) + '</div>' +
         '<div class="meta">' +
-          (s.jobType ? '<span class="chip">' + esc(s.jobType) + '</span>' : '') +
+          (work && s.jobType ? '<span class="chip">' + esc(s.jobType) + '</span>' : '') +
           (s.isFirst ? '<span class="chip first">🚩 first stop</span>' : '') +
           (s.isLast ? '<span class="chip last">🏁 last stop</span>' : '') +
-          (s.confirmed && s.twStart != null && s.twEnd != null
+          (work && s.confirmed && s.twStart != null && s.twEnd != null
             ? '<span class="chip confirm">✓ ' + esc(fmtWindow(s)) + '</span>' : '') +
           (!s.done && state.optimized && state.lastSchedule && state.lastSchedule.arrivals &&
            state.lastSchedule.arrivals[s.id] != null
             ? '<span class="chip eta">→ arr ~' + esc(RouteCore.formatClock(Math.round(state.lastSchedule.arrivals[s.id]))) + '</span>' : '') +
           (needsPin ? '<span class="chip warn">📍 no location — tap to drop pin</span>' : '') +
           (!needsPin && s.approx ? '<span class="chip">≈ area</span>' : '') +
-          (s.note ? '<span class="chip">📝 ' + esc(s.note) + '</span>' : '') +
-          (!s.done
+          (work && s.note ? '<span class="chip">📝 ' + esc(s.note) + '</span>' : '') +
+          (work && !s.done
             ? (state.checkedIn && state.checkedIn.stopId === s.id
               ? '<button class="pill checkin on" data-act="checkin" title="End the service timer">⏳ In service — tap to end</button>'
               : '<button class="pill checkin" data-act="checkin" title="Start the service timer — departures wait until it finishes">▶ Check in</button>')
             : '') +
         '</div></div>' +
         '<div class="acts">' +
-          '<button class="confirm-btn' + (s.confirmed ? ' on' : '') + '" data-act="confirm" title="Confirm appointment window">⏰</button>' +
+          (work ? '<button class="confirm-btn' + (s.confirmed ? ' on' : '') + '" data-act="confirm" title="Confirm appointment window">⏰</button>' : '') +
           '<button class="check-btn' + (s.done ? ' on' : '') + '" data-act="check" title="Mark done">✓</button>' +
           '<button data-act="first" title="Set as first stop">🚩</button>' +
           '<button data-act="last" title="Set as last stop">🏁</button>' +
-          '<button data-act="note" title="Add note">📝</button>' +
+          (work ? '<button data-act="note" title="Add note">📝</button>' : '') +
           '<button data-act="del" title="Remove stop">✕</button>' +
         '</div>';
       if (needsPin) li.querySelector('.meta').style.cursor = 'pointer';
@@ -517,6 +554,7 @@
   $('manualBtn').onclick = () => {
     const f = $('manualForm');
     f.hidden = !f.hidden;
+    $('mJob').style.display = isWorkMode() ? '' : 'none'; // job type is a work concept
     if (!f.hidden) $('mStreet').focus();
   };
   $('mAdd').onclick = async () => {
@@ -1292,9 +1330,22 @@
     $('setHwy').checked = settings.avoidHwy;
     $('setReturn').checked = settings.returnToStart;
     $('setHistory').checked = settings.saveHistory;
+    $('setMode').value = settings.mode || 'work';
+    updateModeHint();
     renderServiceTimes();
     $('settingsSheet').hidden = false;
   };
+  function updateModeHint() {
+    const h = $('modeHint');
+    if (h) h.textContent = isWorkMode()
+      ? 'Work mode: confirmed windows, check-in, notes, job types.'
+      : 'Personal mode: just stops — first/last pins stay, work features hide.';
+  }
+  $('setMode').addEventListener('change', () => {
+    settings.mode = $('setMode').value === 'personal' ? 'personal' : 'work';
+    save(); updateModeHint(); renderServiceTimes(); render();
+    toast(settings.mode === 'personal' ? 'Personal mode — work features hidden' : 'Work mode');
+  });
   $('settingsClose').onclick = () => {
     settings.defaultStart = $('setStart').value.trim();
     settings.avoidTolls = $('setTolls').checked;
@@ -1326,6 +1377,10 @@
     $('setSvcDefault').innerHTML = svcOptions(st.default);
     const box = $('svcRows');
     box.innerHTML = '';
+    if (!isWorkMode()) {
+      box.innerHTML = '<p class="fine">Personal mode: per-job-type times are hidden. Switch to Work mode to adjust them.</p>';
+      return;
+    }
     const known = st.known.slice().sort();
     if (!known.length) {
       box.innerHTML = '<p class="fine">No job types yet — they appear here as you import routes.</p>';

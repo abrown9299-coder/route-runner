@@ -6,7 +6,7 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261002-001243">
+<meta name="app-version" content="20261002-002331">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -16,6 +16,29 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 </head>
 <body>
+
+<!-- Install gate: RouteRunner must run installed, not in the browser.
+     Shown instantly by the inline script below; app.js fills in the steps. -->
+<div id="installGate" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>📲 Install RouteRunner</h2></div>
+    <p class="fine">RouteRunner only runs as an installed app — it won't work in the browser. Follow these steps, then open it from your home screen:</p>
+    <ol id="installSteps" class="install-steps"></ol>
+  </div>
+</div>
+<script>
+(function () {
+  var standalone = false;
+  try {
+    standalone = window.matchMedia('(display-mode: standalone)').matches ||
+                 window.navigator.standalone === true;
+  } catch (e) {}
+  if (!standalone) {
+    var g = document.getElementById('installGate');
+    if (g) g.hidden = false;
+  }
+})();
+</script>
 
 <header id="topbar">
   <div class="brand">
@@ -110,6 +133,10 @@
 <div id="settingsSheet" hidden>
   <div class="sheet">
     <div class="sheet-head"><h2>Settings</h2><button id="settingsClose" class="icon-btn">✕</button></div>
+    <label class="set-row"><span>Mode</span><select id="setMode">
+      <option value="work">Work</option><option value="personal">Personal</option>
+    </select></label>
+    <p class="fine" id="modeHint">Work mode: confirmed windows, check-in, notes, job types.</p>
     <label class="set-row"><span>Default start address <small>(blank = GPS)</small></span>
       <input id="setStart" placeholder="e.g. 123 Main St, Nashville, TN"></label>
     <label class="set-row check"><span>Avoid tolls</span><input id="setTolls" type="checkbox"></label>
