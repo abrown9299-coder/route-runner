@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-151928';
+  const RR_BUILD = '20261002-161549';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -905,10 +905,23 @@
   /* Last known device position (in-memory; refreshed on boot and map open).
    * Powers the "you are here" dot before optimize ever runs. */
   let devicePos = null;
+  let deviceDot = null; // live blue-dot marker on the map
+  let deviceWatchId = null;
   async function ensureDevicePos() {
     if (devicePos) return devicePos;
     try { devicePos = await getGps(); } catch (e) { devicePos = null; }
     return devicePos;
+  }
+  /* Keep the blue dot tracking the device in real time. */
+  function startDeviceTracking() {
+    if (!('geolocation' in navigator) || deviceWatchId != null) return;
+    try {
+      deviceWatchId = navigator.geolocation.watchPosition((pos) => {
+        devicePos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        if (deviceDot && mapObj) deviceDot.setLatLng([devicePos.lat, devicePos.lng]);
+        adoptDevicePos();
+      }, () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 });
+    } catch (e) {}
   }
   /* Adopt the device position as the GPS origin (once known). */
   function adoptDevicePos() {
@@ -1668,8 +1681,11 @@
     if (!mapObj || $('mapWrap').hidden) return;
     mapLayers.forEach((l) => mapObj.removeLayer(l));
     mapLayers = [];
+    deviceDot = null; // redrawn below; live tracking re-attaches
     const pts = state.stops.filter((s) => s.lat != null);
-    if (state.origin.lat != null) pts.unshift({ lat: state.origin.lat, lng: state.origin.lng, _origin: true });
+    // GPS origin: the blue "you are here" dot represents it — no separate pin.
+    const originIsGps = state.origin.type === 'gps';
+    if (state.origin.lat != null && !originIsGps) pts.unshift({ lat: state.origin.lat, lng: state.origin.lng, _origin: true });
     // return-to-start: show the origin again as the final destination
     if (state.returnActive && state.optimized && state.origin.lat != null) {
       pts.push({ lat: state.origin.lat, lng: state.origin.lng, _return: true });
@@ -1694,18 +1710,18 @@
       const pl = L.polyline(line.map((p) => [p.lat, p.lng]), { color: '#7c5cff', weight: 4 }).addTo(mapObj);
       mapLayers.push(pl);
     }
-    // "You are here" dot — drawn when the device position is known and isn't
-    // already represented by the GPS origin marker.
-    const originIsDevice = state.origin.type === 'gps' && state.origin.lat != null;
-    if (devicePos && !originIsDevice) {
+    // "You are here" blue dot — always drawn when the device position is known.
+    // The dot IS the GPS origin; no separate pin is drawn for it.
+    if (devicePos) {
       const dot = L.circleMarker([devicePos.lat, devicePos.lng], {
         radius: 9, color: '#ffffff', weight: 2, fillColor: '#2f7bff', fillOpacity: 1,
       }).addTo(mapObj);
       dot.bindPopup('You are here');
       mapLayers.push(dot);
+      deviceDot = dot;
     }
     const boundPts = pts.map((p) => [p.lat, p.lng]);
-    if (devicePos && !originIsDevice) boundPts.push([devicePos.lat, devicePos.lng]);
+    if (devicePos) boundPts.push([devicePos.lat, devicePos.lng]);
     if (boundPts.length) mapObj.fitBounds(L.latLngBounds(boundPts).pad(0.15));
   }
 
@@ -2108,7 +2124,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-151928' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-161549' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
@@ -2216,6 +2232,8 @@
   checkForUpdate();
   // Resume auto check-in watch if it was on (work mode only).
   if (settings.autoCheckin && isWorkMode()) startAutoCheckinWatch();
+  // Live blue-dot tracking: keep the map's "you are here" dot moving.
+  startDeviceTracking();
   // Ask for location services right on launch: the permission prompt appears
   // immediately, and the map can show "you are here" before optimize runs.
   if (state.origin.type === 'gps' && state.origin.lat == null) {
