@@ -872,14 +872,16 @@ function formatMins(mins) {
 /* Label for one stop: "street, city, ST zip" — or "lat,lng" when the
  * address parts are missing (e.g. a hand-dropped map pin). */
 function stopLabel(s) {
+  // Prefer coordinates: Google Maps always routes to exact lat/lng, even
+  // when its address database lacks the street address (e.g. "3500 Saindon St").
+  if (s && typeof s.lat === 'number' && typeof s.lng === 'number') {
+    return s.lat + ',' + s.lng;
+  }
   if (s && s.street) {
     var city = s.city ? s.city + ', ' : '';
     var state = s.state ? s.state + ' ' : '';
     var zip = s.zip || '';
     return (s.street + ', ' + city + state + zip).replace(/\s+$/, '');
-  }
-  if (s && typeof s.lat === 'number' && typeof s.lng === 'number') {
-    return s.lat + ',' + s.lng;
   }
   return '';
 }
