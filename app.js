@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-135143';
+  const RR_BUILD = '20261002-151928';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -1768,32 +1768,44 @@
       Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
     return 2 * R * Math.asin(Math.sqrt(h));
   }
+  function checkProximityCheckin(lat, lng) {
+    if (!isWorkMode() || !settings.autoCheckin) return;
+    if (state.checkedIn) return; // already in service somewhere
+    // find the nearest not-done stop with coordinates within 150m
+    let best = null, bestD = 150;
+    for (const s of state.stops) {
+      if (s.done || s.lat == null || s.lng == null) continue;
+      const d = haversineM(lat, lng, s.lat, s.lng);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    if (best) {
+      state.checkedIn = { stopId: best.id, startedAt: Date.now(), auto: true };
+      save(); render();
+      toast('📍 Auto checked in — ' + serviceMinFor(best) + ' min service timer running');
+      maybeAutoReopt('checkin');
+    }
+  }
+  let proximityIntervalId = null;
   function startAutoCheckinWatch() {
     stopAutoCheckinWatch();
     if (!('geolocation' in navigator)) return;
     if (!isWorkMode() || !settings.autoCheckin) return;
     try {
       autoCheckinWatchId = navigator.geolocation.watchPosition((pos) => {
-        if (!isWorkMode() || !settings.autoCheckin) return;
-        if (state.checkedIn) return; // already in service somewhere
-        const lat = pos.coords.latitude, lng = pos.coords.longitude;
-        // find the nearest not-done stop with coordinates within 100m
-        let best = null, bestD = 100;
-        for (const s of state.stops) {
-          if (s.done || s.lat == null || s.lng == null) continue;
-          const d = haversineM(lat, lng, s.lat, s.lng);
-          if (d < bestD) { bestD = d; best = s; }
-        }
-        if (best) {
-          state.checkedIn = { stopId: best.id, startedAt: Date.now(), auto: true };
-          save(); render();
-          toast('📍 Auto checked in — ' + serviceMinFor(best) + ' min service timer running');
-          maybeAutoReopt('checkin');
-        }
+        checkProximityCheckin(pos.coords.latitude, pos.coords.longitude);
       }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
+      // Fallback: iOS suspends watchPosition when backgrounded. Poll every 60s
+      // and check immediately when the app becomes visible.
+      proximityIntervalId = setInterval(() => {
+        if (!isWorkMode() || !settings.autoCheckin || state.checkedIn) return;
+        navigator.geolocation.getCurrentPosition((pos) => {
+          checkProximityCheckin(pos.coords.latitude, pos.coords.longitude);
+        }, () => {}, { enableHighAccuracy: true, maximumAge: 60000, timeout: 15000 });
+      }, 60000);
     } catch (e) {}
   }
   function stopAutoCheckinWatch() {
+    if (proximityIntervalId != null) { clearInterval(proximityIntervalId); proximityIntervalId = null; }
     if (autoCheckinWatchId != null && 'geolocation' in navigator) {
       try { navigator.geolocation.clearWatch(autoCheckinWatchId); } catch (e) {}
     }
@@ -2096,7 +2108,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-135143' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-151928' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
@@ -2222,6 +2234,13 @@
         toast('Yesterday\'s completed route was cleared');
       }
       checkForUpdate(); maybeAutoReopt('visible');
+      // Proximity check on return: iOS suspends geolocation in background,
+      // so check immediately when the app becomes visible.
+      if (isWorkMode() && settings.autoCheckin && !state.checkedIn && 'geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition((pos) => {
+          checkProximityCheckin(pos.coords.latitude, pos.coords.longitude);
+        }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
+      }
     } // reopened: fresh times + re-route
   });
   window.addEventListener('pagehide', saveUIState);
