@@ -105,6 +105,10 @@ main { padding: 12px 12px 0; max-width: 640px; margin: 0 auto; }
 .btn.danger { background: none; border-color: var(--red); color: var(--red); width: 100%; margin-top: 12px; }
 .btn:disabled { opacity: .45; }
 
+/* Side-by-side popup buttons */
+.btn-row { display: flex; gap: 10px; margin-top: 14px; }
+.btn-row .btn { flex: 1; }
+
 /* Status line */
 .status-line { text-align: center; font-size: 13px; color: var(--dim); margin: 2px 0 10px; min-height: 18px; }
 .status-line.warn { color: var(--amber); }

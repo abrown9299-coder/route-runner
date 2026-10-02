@@ -6,7 +6,7 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261001-234757">
+<meta name="app-version" content="20261002-001243">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -151,6 +151,18 @@
     <ul id="riskList" class="risk-list"></ul>
     <label class="set-row check"><span>Don't warn me again for this route</span><input id="riskMute" type="checkbox"></label>
     <button id="riskOk" class="btn primary">Got it</button>
+  </div>
+</div>
+
+<!-- Re-optimize for confirmed appointment -->
+<div id="reoptSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>Re-optimizing route for confirmed appointment?</h2></div>
+    <p class="fine" id="reoptText">You're running behind — reordering stops could get you to your confirmed appointment on time.</p>
+    <div class="btn-row">
+      <button id="reoptYes" class="btn primary">Yes</button>
+      <button id="reoptNo" class="btn secondary">Keep as is</button>
+    </div>
   </div>
 </div>
 

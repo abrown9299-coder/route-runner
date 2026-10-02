@@ -15,7 +15,10 @@
   }
 
   async function load(progressFn) {
-    if (workerPromise) return workerPromise;
+    if (workerPromise) {
+      try { await workerPromise; return workerPromise; }
+      catch (_) { workerPromise = null; } // a failed load must not poison later imports
+    }
     workerPromise = (async () => {
       if (progressFn) progressFn('Loading text reader…');
       await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
@@ -27,9 +30,18 @@
   }
 
   async function recognize(file) {
-    const worker = await workerPromise;
-    const { data } = await worker.recognize(file);
-    return data.text || '';
+    try {
+      const worker = await workerPromise;
+      const { data } = await worker.recognize(file);
+      return data.text || '';
+    } catch (e) {
+      // a wedged worker must not brick every later import until reload —
+      // drop it so the next load() rebuilds fresh, then surface the error
+      try { const w = await workerPromise; if (w && w.terminate) await w.terminate(); }
+      catch (_) {}
+      workerPromise = null;
+      throw e;
+    }
   }
 
   async function done() {

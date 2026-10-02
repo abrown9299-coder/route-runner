@@ -410,6 +410,12 @@
     }
     $('winSheet').hidden = false;
   }
+  /* Editing the start keeps a 2-hour window (end follows the start);
+   * editing the end is free — it may be shorter or longer than 2 hours. */
+  $('winStart').onchange = () => {
+    const st = inputToMin($('winStart').value);
+    if (st != null) $('winEnd').value = minToInput(st + 120);
+  };
   function closeWindowPopup() {
     winStopId = null;
     $('winSheet').hidden = true;
@@ -563,6 +569,7 @@
     const merged = RouteCore.dedupeStops(state.stops.concat(all));
     state.stops = merged.stops;
     const added = state.stops.length - before;
+    if (collectJobTypes(state.stops)) save(); // learn job types for service-time settings
     markDirty('Added ' + added + ' stop' + (added === 1 ? '' : 's') +
       (merged.removed ? ' · ' + merged.removed + ' duplicate' + (merged.removed === 1 ? '' : 's') + ' skipped' : ''));
     geocodeInBackground();
@@ -849,31 +856,33 @@
         const s = p._stopId ? byStopId[p._stopId] : null;
         return s ? serviceMinFor(s) : 0;
       });
-      const { order, source, matrix, schedule } = await RouteCore.optimizeRouteAsync(points, {
+      const departMin = departMinForOpt();
+      const { order, source, matrix, durMin, schedule } = await RouteCore.optimizeRouteAsync(points, {
         startIdx: Math.max(0, startIdx), firstIdx, lastIdx, fetchFn: fetch.bind(window),
-        windows, serviceMin, departMin: departMinForOpt(), bufferMin: 30,
+        windows, serviceMin, departMin: departMin, bufferMin: 30,
       });
       // before/after from the SAME matrix: apples-to-apples savings
       const beforeMin = RouteCore.routeMinutesForOrder(matrix, beforeOrder, source);
       const afterMin = RouteCore.routeMinutesForOrder(matrix, order, source);
-      state.lastEstimate = {
-        beforeMin: beforeMin,
-        afterMin: afterMin,
-        savedMin: Math.max(0, beforeMin - afterMin),
-        source: source,
-      };
-      state.preEstimateMin = 0;
       const ordered = order
         .map((pi) => points[pi]._stopId)
         .filter((id) => id && byStopId[id])
         .map((id) => byStopId[id]);
-      // the checked-in stop stays visible at the front (you're there now); it
-      // was the effective origin, not a destination, so re-attach it here.
-      // Done stops sink to the bottom — visible history, out of the route.
-      state.stops = (ciStop ? [ciStop] : []).concat(ordered).concat(unlocated).concat(doneStops);
-      state.optimized = true;
-      lastOptAt = Date.now(); // manual optimizes count for the auto-reopt anti-spam gate
-      state.matrixSource = source;
+      const applyOptimization = () => {
+        state.lastEstimate = {
+          beforeMin: beforeMin,
+          afterMin: afterMin,
+          savedMin: Math.max(0, beforeMin - afterMin),
+          source: source,
+        };
+        state.preEstimateMin = 0;
+        // the checked-in stop stays visible at the front (you're there now); it
+        // was the effective origin, not a destination, so re-attach it here.
+        // Done stops sink to the bottom — visible history, out of the route.
+        state.stops = (ciStop ? [ciStop] : []).concat(ordered).concat(unlocated).concat(doneStops);
+        state.optimized = true;
+        lastOptAt = Date.now(); // manual optimizes count for the auto-reopt anti-spam gate
+        state.matrixSource = source;
       // remember per-stop projected arrivals (popup defaults, at-risk checks)
       let risks = [];
       if (schedule) {
@@ -911,6 +920,49 @@
       } else {
         toast(source === 'osrm' ? '⚡ Optimized by drive time' : '⚡ Optimized (straight-line — offline mode)');
       }
+      }; // end applyOptimization
+      /* Re-opt prompt (v1.9.1): true only when the auto engine found a reorder
+       * that would improve confirmed-window outcomes vs the current order. */
+      const reoptKey = () => state.stops.map((s) => s.id + (s.done ? 'd' : '') +
+        (s.confirmed ? `w${s.twStart}-${s.twEnd}` : '')).join(',');
+      const shouldPromptReopt = () => {
+        if (!windows.some(Boolean) || !schedule) return false;
+        const curIds = destStops.map((s) => s.id).join(',');
+        const newIds = ordered.map((s) => s.id).join(',');
+        if (curIds === newIds) return false; // no reorder needed
+        if (reoptDeclinedKey === reoptKey()) return false; // already said "keep as is"
+        const simCtx = { windows, departMin, serviceMin, bufferMin: 30 };
+        const curSim = RouteCore.simulateSchedule(beforeOrder, durMin, simCtx);
+        const late = (vs) => vs.reduce((a, v) => a + (v.lateMin || 0), 0);
+        const nv = schedule.violations, cv = curSim.violations;
+        return nv.length < cv.length ||
+          (nv.length === cv.length && late(nv) < late(cv));
+      };
+      const showReoptPrompt = () => {
+        const names = [];
+        try {
+          const simCtx = { windows, departMin, serviceMin, bufferMin: 30 };
+          const curSim = RouteCore.simulateSchedule(beforeOrder, durMin, simCtx);
+          curSim.violations.slice(0, 2).forEach((v) => {
+            const pid = points[v.point] && points[v.point]._stopId;
+            const s = pid ? byStopId[pid] : null;
+            if (s) names.push(stopLabel(s));
+          });
+        } catch (e) {}
+        $('reoptText').textContent = names.length
+          ? `You're running behind on ${names.join(' · ')} — reordering stops could get you there on time.`
+          : `You're running behind on a confirmed appointment — reordering stops could get you there on time.`;
+        $('reoptSheet').hidden = false;
+      };
+      // v1.9.1: the auto engine asks before reordering to save a confirmed
+      // window — "Re-optimizing route for confirmed appointment?" Yes / Keep as is.
+      // Manual taps always apply immediately; only automatic re-orders prompt.
+      if (auto && shouldPromptReopt()) {
+        pendingReopt = { apply: applyOptimization, key: reoptKey() };
+        showReoptPrompt();
+        return;
+      }
+      applyOptimization();
     } catch (e) {
       console.warn(e);
       if (!auto) toast('Optimization hit a snag — try again');
@@ -920,6 +972,22 @@
       optInFlight = false;
     }
   }
+
+  /* Re-opt prompt state (v1.9.1): the pending reorder + the situation key the
+   * user declined, so "Keep as is" isn't re-asked until something changes. */
+  let pendingReopt = null, reoptDeclinedKey = null;
+  $('reoptYes').onclick = () => {
+    $('reoptSheet').hidden = true;
+    const p = pendingReopt; pendingReopt = null;
+    if (p) p.apply();
+  };
+  $('reoptNo').onclick = () => {
+    $('reoptSheet').hidden = true;
+    if (pendingReopt) reoptDeclinedKey = pendingReopt.key;
+    pendingReopt = null;
+    lastOptAt = Date.now(); // treated as handled for the anti-spam gate
+    toast('Keeping your current order');
+  };
 
   /* ---------- automatic re-optimization engine (v1.9) ----------
    * Fires when: a stop is marked done, a window is confirmed/changed, the
@@ -943,7 +1011,7 @@
       }
       return;
     }
-    if (!$('winSheet').hidden || !$('riskSheet').hidden) return; // user mid-flow
+    if (!$('winSheet').hidden || !$('riskSheet').hidden || !$('reoptSheet').hidden) return; // user mid-flow
     const now = Date.now();
     const immediate = (reason === 'done' || reason === 'window' || reason === 'checkin');
     const reopen = (reason === 'boot' || reason === 'visible');
@@ -1182,6 +1250,7 @@
     state.geocoding = false;
     state.geocodeStatus = '';
     state.pinModeStopId = null;
+    geocodeInflight = null; // a clear must not leave a stale in-flight geocode
     state.warnSuppressed = false; // new route: at-risk warnings come back
     state.checkedIn = null;
     state.lastSchedule = null;
