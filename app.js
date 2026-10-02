@@ -635,28 +635,29 @@
         };
         list.appendChild(li);
       });
-      // "Use what I typed" — Photon often lacks house numbers; Nominatim
-      // usually has the full address. Geocode the raw text directly.
+      // "Use what I typed" — Photon often lacks house numbers; the Census
+      // geocoder is authoritative for US addresses and free with no key.
       if (q.match(/^\d+\s+\S/)) {
         const li = document.createElement('li');
         li.innerHTML = '➕ <b>Use "' + esc(q) + '"</b><small>Look up this exact address</small>';
         li.onclick = async () => {
           toast('Looking up address…');
           try {
-            const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
-              encodeURIComponent(q + ', Nashville, TN');
-            const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+            const url = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
+              '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json';
+            const r = await fetch(url);
             const j = await r.json();
-            if (!j.length) { toast('Could not find that address'); return; }
-            const a = j[0].address || {};
+            const m = j.result && j.result.addressMatches && j.result.addressMatches[0];
+            if (!m) { toast('Could not find that address'); return; }
+            const a = m.addressComponents || {};
             addStops([{
               id: uid(),
-              street: [a.house_number, a.road].filter(Boolean).join(' ') || q,
-              city: a.city || a.town || a.village || 'Nashville',
-              state: a.state_code || 'TN', zip: a.postcode || '',
+              street: ((a.number || '') + ' ' + (a.street || '')).trim() || q,
+              city: a.city || 'Nashville',
+              state: 'TN', zip: a.zip || '',
               jobType: '', note: '',
-              lat: parseFloat(j[0].lat), lng: parseFloat(j[0].lon),
-              geocodeSource: 'nominatim-manual',
+              lat: m.coordinates.y, lng: m.coordinates.x,
+              geocodeSource: 'census-manual',
               done: false, isLast: false, isFirst: false,
               confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
             }]);
@@ -815,6 +816,21 @@
     return false;
   }
 
+  async function geocodeCensusOne(s) {
+    // US Census one-shot geocoder: authoritative, free, no key.
+    const q = encodeURIComponent(stopLabel(s));
+    const r = await fetch(
+      'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
+      '?address=' + q + '&benchmark=2020&format=json');
+    const j = await r.json();
+    const m = j.result && j.result.addressMatches && j.result.addressMatches[0];
+    if (m && m.coordinates) {
+      s.lng = m.coordinates.x; s.lat = m.coordinates.y; s.geocodeSource = 'census-one';
+      return true;
+    }
+    return false;
+  }
+
   function getGps() {
     return new Promise((resolve) => {
       if (!navigator.geolocation) return resolve(null);
@@ -903,7 +919,9 @@
     } else if (state.origin.type === 'address' && state.origin.lat == null) {
       statusFn('Locating start address…');
       const tmp = { street: state.origin.label };
-      if (await geocodeNominatim(tmp).catch(() => false)) {
+      if (await geocodeCensusOne(tmp).catch(() => false)) {
+        state.origin.lat = tmp.lat; state.origin.lng = tmp.lng;
+      } else if (await geocodeNominatim(tmp).catch(() => false)) {
         state.origin.lat = tmp.lat; state.origin.lng = tmp.lng;
       } else {
         try {
@@ -1382,14 +1400,16 @@
         li.onclick = async () => {
           toast('Looking up address…');
           try {
-            const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
-              encodeURIComponent(q + ', Nashville, TN');
-            const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+            const url = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
+              '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json';
+            const r = await fetch(url);
             const j = await r.json();
-            if (!j.length) { toast('Could not find that address'); return; }
+            const m = j.result && j.result.addressMatches && j.result.addressMatches[0];
+            if (!m) { toast('Could not find that address'); return; }
             state.origin = {
-              type: 'address', label: j[0].display_name.split(',').slice(0, 2).join(','),
-              lat: parseFloat(j[0].lat), lng: parseFloat(j[0].lon),
+              type: 'address',
+              label: m.matchedAddress.split(',').slice(0, 2).join(','),
+              lat: m.coordinates.y, lng: m.coordinates.x,
             };
             $('originSheet').hidden = true;
             markDirty('Start updated');
