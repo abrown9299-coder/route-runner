@@ -481,6 +481,24 @@ function minutesMatrix(matrix, source) {
   });
 }
 
+/* Time-of-day traffic multiplier for Nashville. OSRM gives free-flow times;
+ * this adjusts toward the average drive time for that time of day. Not
+ * real-time, but much closer than free-flow. Based on typical Nashville
+ * congestion patterns; refined over time from actual drive data. */
+function trafficFactorAt(departMin) {
+  var t = ((departMin % 1440) + 1440) % 1440; /* minutes since midnight */
+  var h = t / 60;
+  if (h < 6) return 1.0;    /* overnight: free flow */
+  if (h < 7) return 1.1;   /* early morning buildup */
+  if (h < 9) return 1.35;  /* morning rush */
+  if (h < 11) return 1.15; /* mid-morning */
+  if (h < 13) return 1.1;   /* lunch */
+  if (h < 16) return 1.15;  /* afternoon */
+  if (h < 18.5) return 1.4; /* evening rush */
+  if (h < 20) return 1.2;   /* evening wind-down */
+  return 1.05;              /* late evening */
+}
+
 function serviceMinAt(ctx, i) {
   var s = ctx ? ctx.serviceMin : null;
   var v;
@@ -626,7 +644,12 @@ function simulateSchedule(order, durMin, ctx) {
     var row = durMin ? durMin[prev] : null;
     var d = row ? row[cur] : null;
     /* unreachable leg: astronomic drive time so no optimizer picks it */
-    var dm = (d === null || d === undefined || !isFinite(d)) ? 1e9 : d;
+    var baseDm = (d === null || d === undefined || !isFinite(d)) ? 1e9 : d;
+    /* Traffic-aware: adjust for the time of day this leg is driven.
+     * OSRM gives free-flow; this gets us to the average for that hour.
+     * Disable with ctx.traffic === false (tests). */
+    var useTraffic = !c || c.traffic !== false;
+    var dm = (baseDm >= 1e9 || !useTraffic) ? baseDm : baseDm * trafficFactorAt(t);
     drive += dm;
     t += dm;
     var w = windows[cur];
@@ -1122,7 +1145,8 @@ var RouteCore = {
   simulateSchedule: simulateSchedule,
   scheduleCost: scheduleCost,
   costLess: costLess,
-  findEarlyArrivalOpportunity: findEarlyArrivalOpportunity
+  findEarlyArrivalOpportunity: findEarlyArrivalOpportunity,
+  trafficFactorAt: trafficFactorAt
 };
 
 if (typeof module !== 'undefined' && module.exports) {
