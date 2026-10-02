@@ -1419,22 +1419,23 @@
     if (!modal) {
       modal = document.createElement('div');
       modal.id = 'diagModal';
-      modal.className = 'sheet-backdrop';
+      // Inline styles — no dependency on stylesheet classes.
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
       modal.innerHTML =
-        '<div class="sheet" style="max-height:85vh;display:flex;flex-direction:column">' +
-        '<h3>Diagnostics</h3>' +
-        '<textarea id="diagText" readonly style="flex:1;min-height:200px;font-family:monospace;font-size:11px"></textarea>' +
-        '<div class="btn-row">' +
+        '<div style="background:#151a2e;border:1px solid #2a3350;border-radius:16px;padding:16px;width:100%;max-width:500px;max-height:85vh;display:flex;flex-direction:column;gap:10px">' +
+        '<h3 style="margin:0;color:#fff">Diagnostics</h3>' +
+        '<textarea id="diagText" readonly style="flex:1;min-height:220px;font-family:monospace;font-size:11px;background:#0a0c14;color:#c0c8e0;border:1px solid #2a3350;border-radius:8px;padding:8px"></textarea>' +
+        '<div style="display:flex;gap:8px">' +
         '<button id="diagCopy" class="btn">📋 Copy</button>' +
         '<button id="diagShare" class="btn">📤 Share</button>' +
         '<button id="diagClose" class="btn">Close</button>' +
         '</div></div>';
       document.body.appendChild(modal);
-      $('diagClose').onclick = () => { modal.hidden = true; };
-      modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
+      $('diagClose').onclick = () => { modal.style.display = 'none'; };
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
     }
     $('diagText').value = text;
-    modal.hidden = false;
+    modal.style.display = 'flex';
     // Wire copy/share each time (modal is created once).
     $('diagCopy').onclick = async () => {
       try {
@@ -2133,6 +2134,7 @@
   /* ---------- boot ---------- */
   load();
   if (!loadSharedRoute()) render();
+  try { const av = $('appVer'); if (av) av.textContent = APP_VERSION; } catch (e) {}
   try {
     const u = new URL(location.href);
     if (u.searchParams.has('v')) {
