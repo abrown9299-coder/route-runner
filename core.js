@@ -99,7 +99,10 @@ function parseShortWindow(s, apptMin) {
 function hasLockIndicator(s) {
   var t = String(s);
   if (t.indexOf('🔒') !== -1) return true;
+  if (t.indexOf('🔐') !== -1) return true; // closed lock variant
   if (/\block\b/i.test(t)) return true;
+  // OCR often renders 🔒 as a small square/bracket artifact near the time
+  if (/[\u25A0-\u25FF]/.test(t) && /\d{1,2}:\d{2}/.test(t)) return true;
   return false;
 }
 
@@ -313,10 +316,12 @@ function parseOcrText(text) {
       if (hasLockIndicator(lines[bl])) { locked = true; break; }
     }
     // Short window: "3-5" on a nearby line means 3 PM - 5 PM (uses apptMin's AM/PM).
+    // A short window is itself a confirmation signal — unconfirmed stops
+    // don't have windows, only odd ETA times.
     if (apptMin != null && twEnd == null) {
       for (var wl = blockStart; wl <= Math.min(i + 1, lines.length - 1); wl++) {
         var sw = parseShortWindow(lines[wl], apptMin);
-        if (sw) { twEnd = sw.end; break; }
+        if (sw) { twEnd = sw.end; locked = true; break; }
       }
     }
 
