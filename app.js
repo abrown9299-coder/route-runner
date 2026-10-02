@@ -412,7 +412,16 @@
       const ci = state.checkedIn;
       if (ci && ci.stopId === s.id) {
         state.checkedIn = null;
-        toast('Service timer stopped');
+        // Ending the service timer completes the stop, same as the checkmark.
+        if (!s.done) {
+          s.done = true;
+          toast('✅ Service done — on to the next stop');
+          if (state.stops.length && state.stops.every((x) => x.done)) {
+            state.completedAt = Date.now();
+          }
+        } else {
+          toast('Service timer stopped');
+        }
       } else {
         // one active service at a time: checking in here ends any other
         state.checkedIn = { stopId: s.id, startedAt: Date.now() };
@@ -653,8 +662,11 @@
             id: uid(), street: p.street, city: p.city, state: p.state, zip: p.zip,
             jobType: p.jobType || '', note: '', lat: null, lng: null, geocodeSource: null,
             done: false, isLast: false, isFirst: false,
-            confirmed: p.twEnd != null && p.apptMin != null,
-            twStart: p.apptMin, twEnd: p.twEnd,
+            // Exact times from screenshots become confirmed 1-hour windows.
+            // Full windows stay as-is.
+            confirmed: p.apptMin != null,
+            twStart: p.apptMin,
+            twEnd: p.twEnd != null ? p.twEnd : (p.apptMin != null ? p.apptMin + 60 : null),
             apptMin: (p.apptMin != null ? p.apptMin : null), source: 'ocr',
           }));
         } catch (err) { console.warn('OCR failed for one image', err); }
