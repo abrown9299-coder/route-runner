@@ -527,7 +527,7 @@ function schedCtx(o, n) {
  * Only suggests when savings >= 10 min and earliness <= 30 min. The user
  * decides — this never auto-applies. */
 var EARLY_MAX_MIN = 30;   /* never suggest more than 30 min early */
-var EARLY_MIN_SAVE = 10;  /* only suggest when saving 10+ min of driving */
+var EARLY_MIN_SAVE = 15;  /* only suggest when saving 15+ min of driving */
 function findEarlyArrivalOpportunity(order, durMin, ctx) {
   var c = ctx || {};
   var windows = c.windows || [];

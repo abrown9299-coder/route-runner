@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-195403';
+  const RR_BUILD = '20261002-200055';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -1283,8 +1283,11 @@
         return;
       }
       applyOptimization();
-      // Show early-arrival suggestion if one was found.
-      if (state.earlyOpportunity && !auto) {
+      // Show early-arrival suggestion: manual optimizes always; auto-optimizes
+      // only when a stop was just completed (the natural decision point).
+      // Never more than 30 min early (enforced in findEarlyArrivalOpportunity).
+      const showEarly = !auto || lastAutoReason === 'done' || lastAutoReason === 'checkin';
+      if (state.earlyOpportunity && showEarly) {
         showEarlySuggestion(state.earlyOpportunity);
       }
     } catch (e) {
@@ -1361,7 +1364,7 @@
    * app is opened/reopened after 15+ minutes, or the user interacts after
    * 15+ minutes idle. Pulls fresh drive times and re-optimizes around
    * confirmed windows — automatic and seamless. */
-  let autoTimer = null, autoInFlight = false, lastAutoOptAt = 0;
+  let autoTimer = null, autoInFlight = false, lastAutoOptAt = 0, lastAutoReason = null;
   let lastOptAt = 0; // last optimize of any kind (manual or auto) — anti-spam baseline
   let lastInteractionAt = Date.now(), hiddenAt = 0;
   const AUTO_IDLE_MS = 15 * 60 * 1000;
@@ -1391,9 +1394,11 @@
     autoTimer = setTimeout(() => {
       autoTimer = null;
       autoInFlight = true;
+      lastAutoReason = reason; // so doOptimize knows whether to surface suggestions
       doOptimize(true).catch(() => {}).finally(() => {
         autoInFlight = false;
         lastAutoOptAt = Date.now();
+        lastAutoReason = null;
       });
     }, immediate ? 1500 : 2500);
   }
@@ -2210,7 +2215,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-195403' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-200055' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
