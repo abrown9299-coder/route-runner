@@ -1442,6 +1442,10 @@
     renderServiceTimes();
     $('settingsSheet').hidden = false;
   };
+  $('setStartGps').onclick = () => {
+    $('setStart').value = '';
+    toast('Default start cleared — will use GPS');
+  };
   function updateModeHint() {
     const h = $('modeHint');
     if (h) h.textContent = isWorkMode()

@@ -6,7 +6,7 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261002-020347">
+<meta name="app-version" content="20261002-020847">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -153,7 +153,10 @@
     </select></label>
     <p class="fine" id="modeHint">Work mode: confirmed windows, check-in, notes, job types.</p>
     <label class="set-row"><span>Default start address <small>(blank = GPS)</small></span>
-      <input id="setStart" placeholder="e.g. 123 Main St, Nashville, TN"></label>
+      <span style="display:flex;gap:8px;align-items:center">
+        <input id="setStart" placeholder="e.g. 123 Main St, Nashville, TN" style="flex:1">
+        <button id="setStartGps" class="btn ghost" title="Use current location">📡</button>
+      </span></label>
     <label class="set-row check"><span>Avoid tolls</span><input id="setTolls" type="checkbox"></label>
     <label class="set-row check"><span>Avoid highways</span><input id="setHwy" type="checkbox"></label>
     <label class="set-row check"><span>Return to start at end</span><input id="setReturn" type="checkbox"></label>
