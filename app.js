@@ -1413,18 +1413,50 @@
     const text = JSON.stringify(diag, null, 2);
     const fname = 'routerunner-diagnostics-' + Date.now() + '.json';
     const file = new File([text], fname, { type: 'application/json' });
-    // In the installed app there's no Safari downloader — use the native
-    // share sheet so Aaron can "Save to Files".
-    try {
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: 'RouteRunner diagnostics' });
-        return;
+    // In the installed PWA there's no Safari downloader. Show a modal with
+    // the JSON plus Copy and Share buttons — bulletproof on iOS.
+    let modal = $('diagModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'diagModal';
+      modal.className = 'sheet-backdrop';
+      modal.innerHTML =
+        '<div class="sheet" style="max-height:85vh;display:flex;flex-direction:column">' +
+        '<h3>Diagnostics</h3>' +
+        '<textarea id="diagText" readonly style="flex:1;min-height:200px;font-family:monospace;font-size:11px"></textarea>' +
+        '<div class="btn-row">' +
+        '<button id="diagCopy" class="btn">📋 Copy</button>' +
+        '<button id="diagShare" class="btn">📤 Share</button>' +
+        '<button id="diagClose" class="btn">Close</button>' +
+        '</div></div>';
+      document.body.appendChild(modal);
+      $('diagClose').onclick = () => { modal.hidden = true; };
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
+    }
+    $('diagText').value = text;
+    modal.hidden = false;
+    // Wire copy/share each time (modal is created once).
+    $('diagCopy').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText($('diagText').value);
+        toast('Copied — paste it to Vesper');
+      } catch (e) {
+        $('diagText').select();
+        toast('Select all and copy manually');
       }
-    } catch (e) { /* user dismissed — fall through */ }
-    // Fallback: show it for manual copy.
-    const w = window.open('', '_blank');
-    if (w) { w.document.write('<pre>' + esc(text) + '</pre>'); }
-    else { toast('Sharing not available on this device'); }
+    };
+    $('diagShare').onclick = async () => {
+      const f = new File([$('diagText').value], 'routerunner-diagnostics.json', { type: 'application/json' });
+      try {
+        if (navigator.canShare && navigator.canShare({ files: [f] })) {
+          await navigator.share({ files: [f], title: 'RouteRunner diagnostics' });
+        } else if (navigator.share) {
+          await navigator.share({ title: 'RouteRunner diagnostics', text: $('diagText').value });
+        } else {
+          toast('Sharing not available — use Copy');
+        }
+      } catch (e) { /* dismissed */ }
+    };
   };
   // Capture JS errors for diagnostics.
   window.__rrErrors = window.__rrErrors || [];
