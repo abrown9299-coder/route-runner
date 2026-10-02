@@ -1376,6 +1376,56 @@
     }
   };
 
+  /* ---------- diagnostics download (developer mode) ---------- */
+  $('diagBtn').onclick = () => {
+    const diag = {
+      app: 'RouteRunner',
+      version: APP_VERSION,
+      exportedAt: new Date().toISOString(),
+      userAgent: navigator.userAgent,
+      online: navigator.onLine,
+      settings: {
+        mode: settings.mode,
+        defaultStart: settings.defaultStart || '',
+        defaultEnd: settings.defaultEnd || '',
+        defaultStartCoords: startCoordsCache ? { lat: +startCoordsCache.lat.toFixed(6), lng: +startCoordsCache.lng.toFixed(6) } : null,
+        defaultEndCoords: endCoordsCache ? { lat: +endCoordsCache.lat.toFixed(6), lng: +endCoordsCache.lng.toFixed(6) } : null,
+        autoConfirmAll: !!settings.autoConfirmAll,
+        returnToStart: !!settings.returnToStart,
+      },
+      route: {
+        stopCount: state.stops.length,
+        optimized: !!state.optimized,
+        hasSchedule: !!state.lastSchedule,
+        origin: state.origin ? { type: state.origin.type, label: state.origin.label } : null,
+        endActive: !!state.endActive,
+        stops: state.stops.map((s) => ({
+          street: s.street, city: s.city, state: s.state, zip: s.zip,
+          lat: s.lat != null ? +s.lat.toFixed(6) : null,
+          lng: s.lng != null ? +s.lng.toFixed(6) : null,
+          geocodeSource: s.geocodeSource || '',
+          done: !!s.done, confirmed: !!s.confirmed,
+          appt: s.apptMin != null ? s.apptMin : null,
+        })),
+      },
+      errors: (window.__rrErrors || []).slice(-20),
+    };
+    const blob = new Blob([JSON.stringify(diag, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'routerunner-diagnostics-' + Date.now() + '.json';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    toast('Diagnostics downloaded — send it to Vesper');
+  };
+  // Capture JS errors for diagnostics.
+  window.__rrErrors = window.__rrErrors || [];
+  window.addEventListener('error', (e) => {
+    window.__rrErrors.push({ t: new Date().toISOString(), msg: String(e.message || e.error), src: String(e.filename || '') + ':' + (e.lineno || '') });
+    if (window.__rrErrors.length > 50) window.__rrErrors.shift();
+  });
+
   /* ---------- manual update check ---------- */
   $('updateBtn').onclick = async () => {
     toast('Checking for updates…');
