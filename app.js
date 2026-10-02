@@ -1161,23 +1161,13 @@
 
   /* ---------- share ---------- */
   $('shareBtn').onclick = async () => {
-    if (!state.stops.length) { toast('Nothing to share yet'); return; }
-    const payload = {
-      v: 1,
-      origin: { type: state.origin.type, label: state.origin.label, lat: state.origin.lat, lng: state.origin.lng },
-      settings: { avoidTolls: settings.avoidTolls, avoidHwy: settings.avoidHwy, returnToStart: settings.returnToStart },
-      stops: state.stops.map((s) => ({
-        street: s.street, city: s.city, state: s.state, zip: s.zip,
-        jobType: s.jobType, note: s.note, lat: s.lat, lng: s.lng, isLast: s.isLast, isFirst: s.isFirst,
-        confirmed: !!s.confirmed, twStart: s.twStart, twEnd: s.twEnd, apptMin: s.apptMin,
-      })),
-    };
-    const url = location.href.split('#')[0] + RouteCore.encodeShare(payload);
+    // Share the app itself — never the route data (privacy: everything stays on the phone)
+    const url = 'https://abrown9299-coder.github.io/route-runner/';
     try {
       await navigator.clipboard.writeText(url);
-      toast('🔗 Route link copied — send it to anyone');
+      toast('🔗 App link copied — send it to anyone');
     } catch (e) {
-      prompt('Copy your route link:', url);
+      prompt('Copy the app link:', url);
     }
   };
   function loadSharedRoute() {
@@ -1369,6 +1359,11 @@
     state.returnActive = false;
     $('mapWrap').hidden = true;
     $('mapToggle').textContent = '🗺 Map';
+    try {
+      // erase all route data — no backups or traces left on the device
+      localStorage.removeItem('rr.route.backup');
+      localStorage.removeItem(LS_HIST);
+    } catch (e) {}
     save(); render();
     if (fromSettings) $('settingsSheet').hidden = true;
     toast('All stops cleared — fresh route ready');
