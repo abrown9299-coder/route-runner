@@ -117,24 +117,37 @@ function parseFreeformAddresses(text) {
 }
 var TIME_RE = /^\d{1,2}:\d{2}/;
 
-/* "9:00 AM" -> 540, "2:30pm" -> 870, "14:30" -> 870, garbage -> null. */
+/* "9:00 AM" -> 540, "2:30pm" -> 870, "14:30" -> 870, "9 AM" -> 540, garbage -> null. */
 function parseClockToMin(s) {
   var t = String(s == null ? '' : s).trim();
   var m = t.match(/^(\d{1,2}):(\d{2})/);
-  if (!m) return null;
-  var h = Number(m[1]), mm = Number(m[2]);
-  if (mm > 59) return null;
-  var rest = t.slice(m[0].length).trim();
-  var ap = rest.match(/^([APap])\.?\s*[Mm]\.?/);
-  if (ap) {
-    if (h < 1 || h > 12) return null;
-    var isPM = ap[1].toUpperCase() === 'P';
-    if (isPM && h !== 12) h += 12;
-    if (!isPM && h === 12) h = 0;
-  } else if (rest.length > 0 || h > 23) {
-    return null; /* trailing garbage or bad 24h hour */
+  var h, mm;
+  if (m) {
+    h = Number(m[1]); mm = Number(m[2]);
+    if (mm > 59) return null;
+    var rest = t.slice(m[0].length).trim();
+    var ap = rest.match(/^([APap])\.?\s*[Mm]\.?/);
+    if (ap) {
+      if (h < 1 || h > 12) return null;
+      var isPM = ap[1].toUpperCase() === 'P';
+      if (isPM && h !== 12) h += 12;
+      if (!isPM && h === 12) h = 0;
+    } else if (rest.length > 0 || h > 23) {
+      return null; /* trailing garbage or bad 24h hour */
+    }
+    return h * 60 + mm;
   }
-  return h * 60 + mm;
+  // hour-only: "9 AM" -> 540
+  m = t.match(/^(\d{1,2})\s*([APap])\.?\s*[Mm]\.?$/);
+  if (m) {
+    h = Number(m[1]);
+    if (h < 1 || h > 12) return null;
+    var isPM2 = m[2].toUpperCase() === 'P';
+    if (isPM2 && h !== 12) h += 12;
+    if (!isPM2 && h === 12) h = 0;
+    return h * 60;
+  }
+  return null;
 }
 
 /* 540 -> "9:00 AM", 870 -> "2:30 PM". */
@@ -206,29 +219,58 @@ function parseOcrText(text) {
     if (!m) continue;
 
     /* street = nearest PRECEDING line that starts with a house number.
-     * Strip a leading stop number ("3. 123 Main St" -> "123 Main St"). */
-    var street = '';
+     * Strip a leading stop number ("3. 123 Main St" -> "123 Main St").
+     * Also strip a leading time ("9:00 AM 1014 Kirkwood Ave" -> street). */
+    var street = '', streetLineIdx = -1;
     for (var k = i - 1; k >= 0; k--) {
       var cand = lines[k].replace(/^(?:Stop\s+)?\d{1,2}[.)]\s+/, '');
-      if (STREET_RE.test(cand)) { street = cand; break; }
+      // strip leading time: "9:00 AM 1014 Kirkwood Ave" -> "1014 Kirkwood Ave"
+      cand = cand.replace(/^\d{1,2}:\d{2}\s*[APap]\.?\s*[Mm]\.?\s+/, '');
+      cand = cand.replace(/^\d{1,2}\s*[APap]\.?\s*[Mm]\.?\s+/, '');
+      if (STREET_RE.test(cand)) { street = cand; streetLineIdx = k; break; }
       if (CITY_ZIP_RE.test(lines[k])) break; /* previous stop's block */
     }
     if (!street) continue; /* city line without a street is not a stop */
 
-    /* apptMin = nearest preceding time line inside this stop's block.
-     * Handles exact times AND windows ("9:00 AM - 11:00 AM" -> start=540, end=660).
-     * Times can be anywhere in the line ("Sean Shelby  9:00 AM").
-     * The name itself is never stored. */
+    /* apptMin: search for times in the block. Handles:
+     * - time on its own line or with the name ("Sean Shelby  9:00 AM")
+     * - time merged with the street line ("1014 Kirkwood Ave 9:00 AM")
+     * - time on a line between street and city
+     * - hour-only ("9 AM") */
     var apptMin = null, twEnd = null;
-    for (var t = k - 1; t > prevCity; t--) {
-      if (CITY_ZIP_RE.test(lines[t])) break;
-      var win = parseTimeWindow(lines[t]);
-      if (win) { apptMin = win.start; twEnd = win.end; break; }
-      // Find a clock time anywhere in the line, not just at the start.
-      var tm = lines[t].match(/\b(\d{1,2}:\d{2}\s*[APap]\.?\s*[Mm]\.?)\b/);
-      if (!tm) tm = lines[t].match(/\b(\d{1,2}:\d{2})\b/);
-      var pv = tm ? parseClockToMin(tm[1]) : null;
-      if (pv !== null) { apptMin = pv; break; }
+    function extractTime(line) {
+      var win = parseTimeWindow(line);
+      if (win) return win;
+      var tm = line.match(/\b(\d{1,2}:\d{2}\s*[APap]\.?\s*[Mm]\.?)\b/);
+      if (!tm) tm = line.match(/\b(\d{1,2}:\d{2})\b/);
+      if (!tm) tm = line.match(/\b(\d{1,2}\s*[APap]\.?\s*[Mm]\.?)\b/);
+      if (tm) {
+        var pv = parseClockToMin(tm[1]);
+        if (pv !== null) return { start: pv, end: null };
+      }
+      return null;
+    }
+    // Check the street line itself first (time merged with street)
+    var streetTime = extractTime(lines[streetLineIdx]);
+    if (streetTime) {
+      apptMin = streetTime.start; twEnd = streetTime.end;
+      // strip the time from the street so geocoding isn't polluted
+      street = street.replace(/\s*\b\d{1,2}:\d{2}\s*[APap]\.?\s*[Mm]\.?\b/, '')
+                     .replace(/\s*\b\d{1,2}\s*[APap]\.?\s*[Mm]\.?\b/, '').trim();
+    } else {
+      // Search lines above the street
+      for (var t = k - 1; t > prevCity; t--) {
+        if (CITY_ZIP_RE.test(lines[t])) break;
+        var found = extractTime(lines[t]);
+        if (found) { apptMin = found.start; twEnd = found.end; break; }
+      }
+      // If not found above, check lines between street and city
+      if (apptMin === null) {
+        for (var t2 = streetLineIdx + 1; t2 < i; t2++) {
+          var found2 = extractTime(lines[t2]);
+          if (found2) { apptMin = found2.start; twEnd = found2.end; break; }
+        }
+      }
     }
 
     /* jobType: first try the following-line heuristic (finds specific text like

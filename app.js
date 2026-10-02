@@ -69,6 +69,10 @@
           wipeRouteData();
           state.stops = [];
           state.completedAt = null;
+          state.optimized = false;
+          state.lastSchedule = null;
+          state.returnActive = false;
+          state.checkedIn = null;
         }
         state.matrixSource = r.matrixSource || null;
         state.preEstimateMin = r.preEstimateMin || 0;
@@ -218,7 +222,7 @@
   }
   function markDirty(msg) {
     state.optimized = false; state.matrixSource = null;
-    state.lastEstimate = null;
+    state.lastEstimate = null; state.lastSchedule = null;
     state.preDriveMin = null; state.preDriveSource = null;
     state.returnActive = false;
     // refresh the rough pre-optimization estimate from whatever is located
@@ -295,7 +299,9 @@
     const ds = $('driveSummary');
     if (ds) {
       const sched = state.lastSchedule;
-      if (state.optimized && sched && sched.driveTo) {
+      // Belt-and-suspenders: no stops means no summary, regardless of stale schedule.
+      if (!state.stops.length) ds.hidden = true;
+      else if (state.optimized && sched && sched.driveTo) {
         let remaining = 0, count = 0;
         for (const s of state.stops) {
           if (!s.done && sched.driveTo[s.id] != null) {
