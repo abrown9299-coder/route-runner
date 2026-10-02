@@ -73,6 +73,36 @@ function parseTimeWindow(s) {
   return null;
 }
 
+/* "3-5" style short window: given the appointment hour, "3-5" means 3 PM - 5 PM.
+ * Returns {start, end} or null. The apptMin provides the AM/PM context. */
+function parseShortWindow(s, apptMin) {
+  var m = String(s).match(/^\s*(\d{1,2})\s*[-\u2013\u2014]\s*(\d{1,2})\s*$/);
+  if (!m || apptMin == null) return null;
+  var sh = Number(m[1]), eh = Number(m[2]);
+  // The window start hour should match the appointment hour (12h clock).
+  var apptH12 = Math.floor(apptMin / 60) % 12;
+  if (apptH12 === 0) apptH12 = 12;
+  if (sh !== apptH12) return null;
+  // Infer AM/PM from the appointment time.
+  var isPM = apptMin >= 720 && apptMin < 1440;
+  // Handle noon/midnight edge: 12 PM = 720, 12 AM = 0
+  var startH = sh % 12, endH = eh % 12;
+  if (isPM) { startH += 12; endH += 12; if (startH === 24) startH = 12; if (endH === 24) endH = 12; }
+  else { if (startH === 12) startH = 0; if (endH === 12) endH = 0; }
+  // Overnight windows (e.g. 11-1) are unlikely for appointments; reject.
+  if (endH * 60 <= startH * 60) return null;
+  return { start: startH * 60, end: endH * 60 };
+}
+
+/* Lock detection: 🔒 emoji, the word "lock", or common OCR artifacts.
+ * A lock next to the time means the stop is a confirmed appointment. */
+function hasLockIndicator(s) {
+  var t = String(s);
+  if (t.indexOf('🔒') !== -1) return true;
+  if (/\block\b/i.test(t)) return true;
+  return false;
+}
+
 /* Stop number: "3.", "3)", "Stop 3", "3 of 14" — returns the number or null */
 function parseStopNumber(s) {
   var m = String(s).match(/^(?:Stop\s+)?(\d{1,2})(?:\s*[.)]|\s+of\s+\d+)/i);
@@ -176,7 +206,7 @@ function parseOcrText(text) {
   var out = [];
   var seen = {}; // dedupe by street+zip across formats
 
-  function pushStop(street, city, state, zip, jobType, apptMin, twEnd) {
+  function pushStop(street, city, state, zip, jobType, apptMin, twEnd, locked) {
     var key = (street + '|' + zip).toLowerCase();
     if (seen[key]) return;
     seen[key] = true;
@@ -184,6 +214,7 @@ function parseOcrText(text) {
       street: street, city: city, state: state, zip: zip,
       jobType: jobType || '', apptMin: apptMin != null ? apptMin : null,
       twEnd: twEnd != null ? twEnd : null,
+      locked: !!locked, // 🔒 next to the time = confirmed appointment
     });
   }
 
@@ -252,8 +283,10 @@ function parseOcrText(text) {
     }
     // Check the street line itself first (time merged with street)
     var streetTime = extractTime(lines[streetLineIdx]);
+    var timeLineIdx = -1;
     if (streetTime) {
       apptMin = streetTime.start; twEnd = streetTime.end;
+      timeLineIdx = streetLineIdx;
       // strip the time from the street so geocoding isn't polluted
       street = street.replace(/\s*\b\d{1,2}:\d{2}\s*[APap]\.?\s*[Mm]\.?\b/, '')
                      .replace(/\s*\b\d{1,2}\s*[APap]\.?\s*[Mm]\.?\b/, '').trim();
@@ -262,14 +295,28 @@ function parseOcrText(text) {
       for (var t = k - 1; t > prevCity; t--) {
         if (CITY_ZIP_RE.test(lines[t])) break;
         var found = extractTime(lines[t]);
-        if (found) { apptMin = found.start; twEnd = found.end; break; }
+        if (found) { apptMin = found.start; twEnd = found.end; timeLineIdx = t; break; }
       }
       // If not found above, check lines between street and city
       if (apptMin === null) {
         for (var t2 = streetLineIdx + 1; t2 < i; t2++) {
           var found2 = extractTime(lines[t2]);
-          if (found2) { apptMin = found2.start; twEnd = found2.end; break; }
+          if (found2) { apptMin = found2.start; twEnd = found2.end; timeLineIdx = t2; break; }
         }
+      }
+    }
+    // Lock detection: scan the whole block (time line, street, nearby lines)
+    // for 🔒. A lock means confirmed appointment, regardless of settings.
+    var locked = false;
+    var blockStart = Math.max(0, (timeLineIdx >= 0 ? timeLineIdx : streetLineIdx) - 2);
+    for (var bl = blockStart; bl <= i && bl < lines.length; bl++) {
+      if (hasLockIndicator(lines[bl])) { locked = true; break; }
+    }
+    // Short window: "3-5" on a nearby line means 3 PM - 5 PM (uses apptMin's AM/PM).
+    if (apptMin != null && twEnd == null) {
+      for (var wl = blockStart; wl <= Math.min(i + 1, lines.length - 1); wl++) {
+        var sw = parseShortWindow(lines[wl], apptMin);
+        if (sw) { twEnd = sw.end; break; }
       }
     }
 
@@ -292,7 +339,7 @@ function parseOcrText(text) {
       jobType = matchKnownJobType(lines.slice(Math.max(0, k - 2), i + 2).join(' '));
     }
 
-    pushStop(street, m[1].trim(), m[2], m[3], jobType, apptMin, twEnd);
+    pushStop(street, m[1].trim(), m[2], m[3], jobType, apptMin, twEnd, locked);
     prevCity = i;
   }
   return out;

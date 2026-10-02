@@ -222,7 +222,7 @@
   }
   function markDirty(msg) {
     state.optimized = false; state.matrixSource = null;
-    state.lastEstimate = null; state.lastSchedule = null;
+    state.lastEstimate = null;
     state.preDriveMin = null; state.preDriveSource = null;
     state.returnActive = false;
     // refresh the rough pre-optimization estimate from whatever is located
@@ -688,13 +688,13 @@
             }));
           }
           parsed.forEach((p) => {
-            const autoConfirm = settings.autoConfirmAll && p.apptMin != null;
+            // 🔒 next to the time = confirmed appointment, always. Otherwise
+            // the Work setting controls auto-confirm.
+            const autoConfirm = (p.locked || settings.autoConfirmAll) && p.apptMin != null;
             all.push({
               id: uid(), street: p.street, city: p.city, state: p.state, zip: p.zip,
               jobType: p.jobType || '', note: '', lat: null, lng: null, geocodeSource: null,
               done: false, isLast: false, isFirst: false,
-              // Screenshot times are stored but NOT auto-confirmed unless the
-              // Work setting is on. Tapping the clock pre-fills from apptMin.
               confirmed: autoConfirm,
               twStart: autoConfirm ? p.apptMin : null,
               twEnd: autoConfirm ? (p.twEnd != null ? p.twEnd : p.apptMin + 120) : null,
