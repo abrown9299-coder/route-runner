@@ -437,7 +437,7 @@ function simulateSchedule(order, durMin, ctx) {
     t += dm;
     var w = windows[cur];
     var leg = { point: cur, arrivalMin: t, waitMin: 0, lateMin: 0,
-                winStart: null, winEnd: null, effEnd: null };
+                winStart: null, winEnd: null, effEnd: null, driveMin: dm };
     if (w && w.start !== null && w.start !== undefined &&
         w.end !== null && w.end !== undefined) {
       var effEnd = w.end - bufferMin;

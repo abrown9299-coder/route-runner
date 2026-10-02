@@ -291,6 +291,25 @@
         ? 'No appointments yet — add screenshots of your schedule or search an address above.'
         : 'No stops yet — search an address above to add one.';
     }
+    // Overall remaining drive time summary (only when we have schedule data).
+    const ds = $('driveSummary');
+    if (ds) {
+      const sched = state.lastSchedule;
+      if (state.optimized && sched && sched.driveTo) {
+        let remaining = 0, count = 0;
+        for (const s of state.stops) {
+          if (!s.done && sched.driveTo[s.id] != null) {
+            remaining += sched.driveTo[s.id]; count++;
+          }
+        }
+        if (count > 0) {
+          const hrs = Math.floor(remaining / 60), mins = Math.round(remaining % 60);
+          const txt = hrs > 0 ? hrs + 'h ' + mins + 'm' : mins + ' min';
+          ds.innerHTML = '🚗 <strong>' + txt + '</strong> driving left · ' + count + ' stop' + (count === 1 ? '' : 's') + ' to go';
+          ds.hidden = false;
+        } else ds.hidden = true;
+      } else ds.hidden = true;
+    }
     state.stops.forEach((s, i) => {
       const li = document.createElement('li');
       li.className = 'stop' + (s.done ? ' done' : '') + (s.isLast ? ' is-last' : '') + (s.isFirst ? ' is-first' : '');
@@ -310,6 +329,9 @@
           (!s.done && state.optimized && state.lastSchedule && state.lastSchedule.arrivals &&
            state.lastSchedule.arrivals[s.id] != null
             ? '<span class="chip eta">→ arr ~' + esc(RouteCore.formatClock(Math.round(state.lastSchedule.arrivals[s.id]))) + '</span>' : '') +
+          (!s.done && state.optimized && state.lastSchedule && state.lastSchedule.driveTo &&
+           state.lastSchedule.driveTo[s.id] != null
+            ? '<span class="chip drive">🚗 ' + Math.round(state.lastSchedule.driveTo[s.id]) + ' min</span>' : '') +
           (needsPin ? '<span class="chip warn">📍 no location — tap to drop pin</span>' : '') +
           (!needsPin && s.approx ? '<span class="chip">≈ area</span>' : '') +
           (work && s.note ? '<span class="chip">📝 ' + esc(s.note) + '</span>' : '') +
@@ -321,7 +343,7 @@
         '</div></div>' +
         '<div class="acts">' +
           (work ? '<button class="confirm-btn' + (s.confirmed ? ' on' : '') + '" data-act="confirm" title="Confirm appointment window">⏰</button>' : '') +
-          '<button class="check-btn' + (s.done ? ' on' : '') + '" data-act="check" title="Mark done">✓</button>' +
+          '<button class="check-btn' + (s.done ? ' on' : '') + '" data-act="check" title="' + (s.done ? 'Reopen stop' : 'Mark done') + '">✓</button>' +
           '<button data-act="first" title="Set as first stop">🚩</button>' +
           '<button data-act="last" title="Set as last stop">🏁</button>' +
           (work ? '<button data-act="note" title="Add note">📝</button>' : '') +
@@ -1008,12 +1030,15 @@
       // remember per-stop projected arrivals (popup defaults, at-risk checks)
       let risks = [];
       if (schedule) {
-        const arrivals = {};
+        const arrivals = {}, driveTo = {};
         schedule.legs.forEach((leg) => {
           const pid = points[leg.point] && points[leg.point]._stopId;
-          if (pid) arrivals[pid] = leg.arrivalMin;
+          if (pid) {
+            arrivals[pid] = leg.arrivalMin;
+            if (leg.driveMin != null && isFinite(leg.driveMin)) driveTo[pid] = leg.driveMin;
+          }
         });
-        state.lastSchedule = { at: Date.now(), arrivals };
+        state.lastSchedule = { at: Date.now(), arrivals, driveTo };
         risks = schedule.violations
           .map((v) => {
             const pid = points[v.point] && points[v.point]._stopId;
