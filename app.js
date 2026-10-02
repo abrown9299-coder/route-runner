@@ -2062,6 +2062,9 @@
       .catch(() => {});
   }
   function applyUpdate(serverVersion) {
+    // Guard: never run two updates at once (rapid taps froze the app).
+    if (window.__rrUpdating) return;
+    window.__rrUpdating = true;
     ssSet('rr.updating', '1');
     try {
       const route = localStorage.getItem(LS_ROUTE);
