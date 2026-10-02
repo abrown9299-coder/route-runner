@@ -1260,6 +1260,25 @@
       prompt('Copy the app link:', url);
     }
   };
+
+  /* ---------- manual update check ---------- */
+  $('updateBtn').onclick = async () => {
+    toast('Checking for updates…');
+    try {
+      const resp = await fetch('version.json', { cache: 'no-store' });
+      const info = resp.ok ? await resp.json() : null;
+      if (!info || !info.version) { toast('Could not check — try again'); return; }
+      if (info.version === APP_VERSION) {
+        toast('✓ You are on the newest version');
+      } else {
+        // Clear the stale-update guard so the update always runs.
+        ssDel('rr.updating'); ssDel('rr.updating_at');
+        applyUpdate(info.version);
+      }
+    } catch (e) {
+      toast('Could not check — are you online?');
+    }
+  };
   function loadSharedRoute() {
     if (!location.hash.startsWith('#r=')) return false;
     const data = RouteCore.decodeShare(location.hash);
