@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-045936';
+  const RR_BUILD = '20261002-051115';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -1822,12 +1822,12 @@
 
   /* Address autofill for the default start/end fields (Photon + Census exact match). */
   function wireSettingsAutocomplete(inputId, listId, wrapId) {
-    let timer = null;
+    let timer = null, tok = 0;
     $(inputId).addEventListener('input', (e) => {
       clearTimeout(timer);
       const q = e.target.value.trim();
       if (q.length < 4) { $(listId).hidden = true; return; }
-      const myToken = (timer._tok = (timer._tok || 0) + 1);
+      const myToken = ++tok;
       timer = setTimeout(async () => {
         try {
           const list = $(listId);
@@ -1850,7 +1850,7 @@
             : Promise.resolve(null);
           const [pj, cj] = await Promise.all([photonP, censusP]);
           // Stale response guard: if the user kept typing, drop this result.
-          if (timer._tok !== myToken) return;
+          if (myToken !== tok) return;
           list.innerHTML = '';
           // Nominatim exact match FIRST.
           const nm = cj && cj[0];
@@ -2063,7 +2063,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-045936' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-051115' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
