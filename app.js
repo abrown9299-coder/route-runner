@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-045000';
+  const RR_BUILD = '20261002-045636';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -632,22 +632,57 @@
   };
 
   /* ---------- add: search ---------- */
-  let searchTimer = null;
+  let searchTimer = null, searchToken = 0;
   $('searchInput').addEventListener('input', (e) => {
     clearTimeout(searchTimer);
     const q = e.target.value.trim();
     if (q.length < 4) { $('suggestList').hidden = true; return; }
-    searchTimer = setTimeout(() => searchPhoton(q), 350);
+    searchTimer = setTimeout(() => searchPhoton(q, ++searchToken), 350);
   });
-  async function searchPhoton(q) {
+  async function searchPhoton(q, myToken) {
     try {
-      const url = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
-        '&limit=6&lat=36.1627&lon=-86.7816';
-      const r = await fetch(url);
-      const j = await r.json();
       const list = $('suggestList');
       list.innerHTML = '';
-      (j.features || []).forEach((f) => {
+      const hasHouseNum = /^\d+\s+\S/.test(q);
+      // Census exact match: run in parallel with Photon, show first.
+      const censusP = hasHouseNum
+        ? fetch('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
+            '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json')
+            .then((r) => r.json()).catch(() => null)
+        : Promise.resolve(null);
+      const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
+        '&limit=6&lat=36.1627&lon=-86.7816').then((r) => r.json()).catch(() => null);
+      const [cj, j] = await Promise.all([censusP, photonP]);
+      if (myToken !== searchToken) return; // stale — user kept typing
+      list.innerHTML = '';
+      // Census exact match FIRST.
+      const cm = cj && cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
+      if (cm) {
+        const a = cm.addressComponents || {};
+        const street = [(a.fromAddress || a.number || ''),
+                        (a.streetName || a.street || ''),
+                        (a.suffixType || '')].filter(Boolean).join(' ');
+        const li = document.createElement('li');
+        li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
+        li.onclick = () => {
+          addStops([{
+            id: uid(),
+            street: street || q,
+            city: (a.city || 'Nashville'),
+            state: 'TN', zip: a.zip || '',
+            jobType: '', note: '',
+            lat: cm.coordinates.y, lng: cm.coordinates.x,
+            geocodeSource: 'census-manual',
+            done: false, isLast: false, isFirst: false,
+            confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
+          }]);
+          $('searchInput').value = '';
+          list.hidden = true;
+          toast('✓ Stop added');
+        };
+        list.appendChild(li);
+      }
+      (j && j.features || []).forEach((f) => {
         const p = f.properties || {};
         const label = [p.name, p.street, p.city, p.state, p.postcode].filter(Boolean)
           .filter((v, i, a) => a.indexOf(v) === i).join(', ');
@@ -667,46 +702,7 @@
         };
         list.appendChild(li);
       });
-      // "Use what I typed" — Photon often lacks house numbers; the Census
-      // geocoder is authoritative for US addresses and free with no key.
-      // When the query starts with a house number, try Census FIRST and put
-      // the exact match at the top.
-      const hasHouseNum = /^\d+\s+\S/.test(q);
-      if (hasHouseNum) {
-        try {
-          const cUrl = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
-            '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json';
-          const cr = await fetch(cUrl);
-          const cj = await cr.json();
-          const cm = cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
-          if (cm) {
-            const a = cm.addressComponents || {};
-            const street = [(a.fromAddress || a.number || ''),
-                            (a.streetName || a.street || ''),
-                            (a.suffixType || '')].filter(Boolean).join(' ');
-            const li = document.createElement('li');
-            li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
-            li.onclick = () => {
-              addStops([{
-                id: uid(),
-                street: street || q,
-                city: (a.city || 'Nashville'),
-                state: 'TN', zip: a.zip || '',
-                jobType: '', note: '',
-                lat: cm.coordinates.y, lng: cm.coordinates.x,
-                geocodeSource: 'census-manual',
-                done: false, isLast: false, isFirst: false,
-                confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
-              }]);
-              $('searchInput').value = '';
-              list.hidden = true;
-              toast('✓ Stop added');
-            };
-            list.insertBefore(li, list.firstChild);
-          }
-        } catch (e) { /* Census failed — fall through to Photon */ }
-      }
-      list.hidden = !(j.features || []).length && !list.children.length;
+      list.hidden = !list.children.length;
     } catch (e) { /* offline — suggestions unavailable */ }
   }
   document.addEventListener('click', (e) => {
@@ -1526,22 +1522,45 @@
     $('originSheet').hidden = true;
     markDirty('Start updated — using GPS');
   };
-  let originSearchTimer = null;
+  let originSearchTimer = null, originSearchToken = 0;
   $('originSearchInput').addEventListener('input', (e) => {
     clearTimeout(originSearchTimer);
     const q = e.target.value.trim();
     if (q.length < 4) { $('originSuggestList').hidden = true; return; }
-    originSearchTimer = setTimeout(() => searchOriginPhoton(q), 350);
+    originSearchTimer = setTimeout(() => searchOriginPhoton(q, ++originSearchToken), 350);
   });
-  async function searchOriginPhoton(q) {
+  async function searchOriginPhoton(q, myToken) {
     try {
-      const url = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
-        '&limit=6&lat=36.1627&lon=-86.7816';
-      const r = await fetch(url);
-      const j = await r.json();
       const list = $('originSuggestList');
       list.innerHTML = '';
-      (j.features || []).forEach((f) => {
+      const hasHouseNum = /^\d+\s+\S/.test(q);
+      const censusP = hasHouseNum
+        ? fetch('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
+            '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json')
+            .then((r) => r.json()).catch(() => null)
+        : Promise.resolve(null);
+      const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
+        '&limit=6&lat=36.1627&lon=-86.7816').then((r) => r.json()).catch(() => null);
+      const [cj, j] = await Promise.all([censusP, photonP]);
+      if (myToken !== originSearchToken) return; // stale
+      list.innerHTML = '';
+      const cm = cj && cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
+      if (cm) {
+        const li = document.createElement('li');
+        li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
+        li.onclick = () => {
+          state.origin = {
+            type: 'address',
+            label: cm.matchedAddress.split(',').slice(0, 2).join(','),
+            lat: cm.coordinates.y, lng: cm.coordinates.x,
+          };
+          $('originSheet').hidden = true;
+          markDirty('Start updated');
+          toast('✓ Start updated');
+        };
+        list.appendChild(li);
+      }
+      (j && j.features || []).forEach((f) => {
         const p = f.properties || {};
         const label = [p.name, p.street, p.city, p.state, p.postcode].filter(Boolean)
           .filter((v, i, a) => a.indexOf(v) === i).join(', ');
@@ -1556,31 +1575,7 @@
         };
         list.appendChild(li);
       });
-      if (/^\d+\s+\S/.test(q)) {
-        try {
-          const cUrl = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
-            '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json';
-          const cr = await fetch(cUrl);
-          const cj = await cr.json();
-          const cm = cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
-          if (cm) {
-            const li = document.createElement('li');
-            li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
-            li.onclick = () => {
-              state.origin = {
-                type: 'address',
-                label: cm.matchedAddress.split(',').slice(0, 2).join(','),
-                lat: cm.coordinates.y, lng: cm.coordinates.x,
-              };
-              $('originSheet').hidden = true;
-              markDirty('Start updated');
-              toast('✓ Start updated');
-            };
-            list.insertBefore(li, list.firstChild);
-          }
-        } catch (e) { /* Census failed — fall through to Photon */ }
-      }
-      list.hidden = !(j.features || []).length && !list.children.length;
+      list.hidden = !list.children.length;
     } catch (e) { /* offline — suggestions unavailable */ }
   }
   document.addEventListener('click', (e) => {
@@ -1829,15 +1824,44 @@
       clearTimeout(timer);
       const q = e.target.value.trim();
       if (q.length < 4) { $(listId).hidden = true; return; }
+      const myToken = (timer._tok = (timer._tok || 0) + 1);
       timer = setTimeout(async () => {
         try {
-          const url = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
-            '&limit=6&lat=36.1627&lon=-86.7816';
-          const r = await fetch(url);
-          const j = await r.json();
           const list = $(listId);
           list.innerHTML = '';
-          (j.features || []).forEach((f) => {
+          const hasHouseNum = /^\d+\s+\S/.test(q);
+          // Run Photon and Census in parallel. Census is authoritative for
+          // house numbers — show a placeholder so the user knows it's coming.
+          let censusLi = null;
+          if (hasHouseNum) {
+            censusLi = document.createElement('li');
+            censusLi.innerHTML = '🔍 <i>Looking up exact address…</i>';
+            censusLi.style.opacity = '0.6';
+            list.appendChild(censusLi);
+          }
+          const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
+            '&limit=6&lat=36.1627&lon=-86.7816').then((r) => r.json()).catch(() => null);
+          const censusP = hasHouseNum
+            ? fetch('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
+                '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json')
+                .then((r) => r.json()).catch(() => null)
+            : Promise.resolve(null);
+          const [pj, cj] = await Promise.all([photonP, censusP]);
+          // Stale response guard: if the user kept typing, drop this result.
+          if (timer._tok !== myToken) return;
+          list.innerHTML = '';
+          // Census exact match FIRST.
+          const cm = cj && cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
+          if (cm) {
+            const li = document.createElement('li');
+            li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
+            li.onclick = () => {
+              $(inputId).value = cm.matchedAddress;
+              list.hidden = true;
+            };
+            list.appendChild(li);
+          }
+          (pj && pj.features || []).forEach((f) => {
             const p = f.properties || {};
             const label = [p.name, p.street, p.city, p.state, p.postcode].filter(Boolean)
               .filter((v, i, a) => a.indexOf(v) === i).join(', ');
@@ -1855,25 +1879,6 @@
             };
             list.appendChild(li);
           });
-          // Census exact match first when the query has a house number.
-          if (/^\d+\s+\S/.test(q)) {
-            try {
-              const cUrl = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
-                '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json';
-              const cr = await fetch(cUrl);
-              const cj = await cr.json();
-              const cm = cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
-              if (cm) {
-                const li = document.createElement('li');
-                li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
-                li.onclick = () => {
-                  $(inputId).value = cm.matchedAddress;
-                  list.hidden = true;
-                };
-                list.insertBefore(li, list.firstChild);
-              }
-            } catch (e) { /* Census failed — Photon results stand */ }
-          }
           list.hidden = !list.children.length;
         } catch (e) { /* offline — suggestions unavailable */ }
       }, 350);
@@ -2053,7 +2058,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-045000' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-045636' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
