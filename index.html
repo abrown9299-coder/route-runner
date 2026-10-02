@@ -6,7 +6,7 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261002-002708">
+<meta name="app-version" content="20261002-003820">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -121,7 +121,6 @@
 <nav id="actionBar">
   <button id="optimizeBtn" class="btn primary big">⚡<span>Optimize</span></button>
   <button id="mapsBtn" class="btn big">🗺️<span>Maps</span></button>
-  <button id="shareBtn" class="btn big">🔗<span>Share</span></button>
 </nav>
 
 <!-- OCR progress overlay -->
@@ -147,7 +146,7 @@
     <label class="set-row check"><span>Avoid highways</span><input id="setHwy" type="checkbox"></label>
     <label class="set-row check"><span>Return to start at end</span><input id="setReturn" type="checkbox"></label>
     <label class="set-row check"><span>Save route history</span><input id="setHistory" type="checkbox"></label>
-    <div class="set-sec">
+    <div class="set-sec" id="svcSec">
       <h3>Service times</h3>
       <label class="set-row"><span>Default service time</span><select id="setSvcDefault"></select></label>
       <div id="svcRows"></div>
@@ -155,6 +154,7 @@
       <p class="fine">Job types are learned from your imports over time — each can have its own duration.</p>
     </div>
     <button id="clearRoute" class="btn danger">🗑 Clear current route</button>
+    <button id="shareBtn" class="btn">🔗 Share route</button>
     <p class="fine">RouteRunner runs entirely on your phone. No account, no server, no AI.</p>
   </div>
 </div>

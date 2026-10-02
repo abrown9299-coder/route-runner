@@ -19,6 +19,7 @@
     warnSuppressed: false, // "don't warn me again" for at-risk windows, per route
     lastSchedule: null,  // {at, arrivals: {stopId: arrivalMin}} from last optimize
     checkedIn: null,     // {stopId, startedAt} — currently being serviced (v1.9)
+    returnActive: false, // return-to-start was baked into the current optimization
   };
   const settings = {
     defaultStart: '', avoidTolls: false, avoidHwy: false,
@@ -36,7 +37,7 @@
         preEstimateMin: state.preEstimateMin, lastEstimate: state.lastEstimate,
         preDriveMin: state.preDriveMin, preDriveSource: state.preDriveSource,
         warnSuppressed: state.warnSuppressed, lastSchedule: state.lastSchedule,
-        checkedIn: state.checkedIn,
+        checkedIn: state.checkedIn, returnActive: state.returnActive,
       }));
       localStorage.setItem(LS_SET, JSON.stringify(settings));
     } catch (e) { /* storage full/blocked — app still works for the session */ }
@@ -75,6 +76,7 @@
         }
         if (r.checkedIn && !state.checkedIn) save(); // persist dropping a stale check-in
         state.lastSchedule = r.lastSchedule || null;
+        state.returnActive = !!r.returnActive;
       }
     } catch (e) {}
     /* sanitize service-time settings (forward-migration safe) */
@@ -193,6 +195,7 @@
     state.optimized = false; state.matrixSource = null;
     state.lastEstimate = null;
     state.preDriveMin = null; state.preDriveSource = null;
+    state.returnActive = false;
     // refresh the rough pre-optimization estimate from whatever is located
     const pts = locatedPoints();
     state.preEstimateMin = pts.length > 1 ? RouteCore.estimateMinutesHaversine(pts) : 0;
@@ -296,6 +299,16 @@
       if (needsPin) li.querySelector('.meta').style.cursor = 'pointer';
       ul.appendChild(li);
     });
+    // return-to-start footer: the optimized route ends back at the origin
+    if (state.returnActive && state.optimized) {
+      const li = document.createElement('li');
+      li.className = 'stop is-last return-row';
+      li.innerHTML =
+        '<span class="num">🏁</span>' +
+        '<div class="info"><div class="addr">↩ Return to start</div>' +
+        '<div class="meta"><span class="chip last">🏁 last stop</span></div></div>';
+      ul.appendChild(li);
+    }
 
     // status line
     const st = $('routeStatus');
@@ -880,8 +893,14 @@
       // origin may lack coords (GPS denied) — fall back to first stop as start
       let startIdx = 0;
       if (points[0].lat == null) { points.shift(); startIdx = -1; }
+      // return-to-start: the origin becomes a pinned final destination so the
+      // optimized route ends where the day began (needs origin coordinates)
+      const returnPt = (settings.returnToStart && state.origin.lat != null && state.origin.lng != null)
+        ? { lat: state.origin.lat, lng: state.origin.lng, _stopId: '__return' } : null;
+      if (returnPt) points.push(returnPt);
       const lastStop = active.find((s) => s.isLast && s.lat != null);
-      const lastIdx = lastStop ? points.findIndex((p) => p._stopId === lastStop.id) : null;
+      let lastIdx = lastStop ? points.findIndex((p) => p._stopId === lastStop.id) : null;
+      if (returnPt) lastIdx = points.length - 1; // the return always comes last
       const firstStop = active.find((s) => s.isFirst && s.lat != null);
       const firstIdx = firstStop ? points.findIndex((p) => p._stopId === firstStop.id) : null;
 
@@ -925,6 +944,7 @@
         state.optimized = true;
         lastOptAt = Date.now(); // manual optimizes count for the auto-reopt anti-spam gate
         state.matrixSource = source;
+        state.returnActive = !!returnPt;
       // remember per-stop projected arrivals (popup defaults, at-risk checks)
       let risks = [];
       if (schedule) {
@@ -1296,6 +1316,7 @@
     state.warnSuppressed = false; // new route: at-risk warnings come back
     state.checkedIn = null;
     state.lastSchedule = null;
+    state.returnActive = false;
     $('mapWrap').hidden = true;
     $('mapToggle').textContent = '🗺 Map';
     save(); render();
@@ -1351,12 +1372,22 @@
     toast(settings.mode === 'personal' ? 'Personal mode — work features hidden' : 'Work mode');
   });
   $('settingsClose').onclick = () => {
+    const retBefore = settings.returnToStart;
     settings.defaultStart = $('setStart').value.trim();
     settings.avoidTolls = $('setTolls').checked;
     settings.avoidHwy = $('setHwy').checked;
     settings.returnToStart = $('setReturn').checked;
     settings.saveHistory = $('setHistory').checked;
+    if (settings.returnToStart !== retBefore) {
+      // the route shape changed (return leg added/removed) — re-optimize needed
+      state.optimized = false; state.returnActive = false;
+    }
     save();
+    if (settings.returnToStart !== retBefore) {
+      toast(settings.returnToStart
+        ? 'Return to start on — tap ⚡ Optimize to rebuild the route'
+        : 'Return to start off — tap ⚡ Optimize to rebuild the route');
+    }
     if (settings.defaultStart && state.origin.type === 'gps' && !state.origin.lat) {
       state.origin = { type: 'address', label: settings.defaultStart, lat: null, lng: null };
     }
@@ -1377,14 +1408,13 @@
     return html;
   }
   function renderServiceTimes() {
+    const sec = $('svcSec');
+    if (sec) sec.style.display = isWorkMode() ? '' : 'none';
+    if (!isWorkMode()) return; // personal mode: no service-time settings at all
     const st = settings.serviceTimes;
     $('setSvcDefault').innerHTML = svcOptions(st.default);
     const box = $('svcRows');
     box.innerHTML = '';
-    if (!isWorkMode()) {
-      box.innerHTML = '<p class="fine">Personal mode: per-job-type times are hidden. Switch to Work mode to adjust them.</p>';
-      return;
-    }
     const known = st.known.slice().sort();
     if (!known.length) {
       box.innerHTML = '<p class="fine">No job types yet — they appear here as you import routes.</p>';
