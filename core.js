@@ -499,6 +499,18 @@ function trafficFactorAt(departMin) {
   return 1.05;              /* late evening */
 }
 
+/* Rain impact on drive times. Based on transportation research:
+ * light rain ~10% slower, moderate ~20%, heavy 40%+.
+ * precipMm: mm/hour from weather API. */
+function rainFactorFor(precipMm) {
+  var p = Number(precipMm);
+  if (!isFinite(p) || p <= 0) return 1.0;
+  if (p < 0.5) return 1.05;  /* drizzle */
+  if (p < 2.5) return 1.15;  /* light rain */
+  if (p < 7.5) return 1.3;   /* moderate rain */
+  return 1.5;                /* heavy rain */
+}
+
 /* Learned traffic: bucket key for a departure time + destination area.
  * 8 time buckets of 3 hours x weekday/weekend x geo cell (0.1° ~ 7x5.5 mi).
  * Different Nashville areas learn different rush patterns — downtown peaks
@@ -1237,7 +1249,8 @@ var RouteCore = {
   trafficFactorAt: trafficFactorAt,
   trafficBucketKey: trafficBucketKey,
   learnedTrafficFactorAt: learnedTrafficFactorAt,
-  recordTrafficSample: recordTrafficSample
+  recordTrafficSample: recordTrafficSample,
+  rainFactorFor: rainFactorFor
 };
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-202750';
+  const RR_BUILD = '20261002-203451';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
   const LS_TRAFFIC = 'rr.traffic.learn.v1';
@@ -969,20 +969,43 @@
   function saveTrafficLearn(d) {
     try { localStorage.setItem(LS_TRAFFIC, JSON.stringify(d)); } catch (e) {}
   }
+  /* ---------- weather: rain impact on drive times ---------- */
+  let weatherCache = null; // {precipMm, fetchedAt}
+  const WEATHER_TTL_MS = 15 * 60 * 1000; // refresh every 15 min
+  async function fetchWeather() {
+    try {
+      const lat = devicePos ? devicePos.lat : (state.origin.lat != null ? state.origin.lat : 36.16);
+      const lng = devicePos ? devicePos.lng : (state.origin.lng != null ? state.origin.lng : -86.78);
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(2)}&longitude=${lng.toFixed(2)}&current=precipitation&timezone=auto`;
+      const r = await fetchJson(url, {}, 8000);
+      const precip = r && r.current && typeof r.current.precipitation === 'number' ? r.current.precipitation : 0;
+      weatherCache = { precipMm: precip, fetchedAt: Date.now() };
+    } catch (e) {
+      // weather unavailable — assume dry (factor 1.0)
+      weatherCache = { precipMm: 0, fetchedAt: Date.now() };
+    }
+    return weatherCache;
+  }
+  function currentRainFactor() {
+    if (!weatherCache || Date.now() - weatherCache.fetchedAt > WEATHER_TTL_MS) {
+      fetchWeather(); // refresh in background
+      return weatherCache ? RouteCore.rainFactorFor(weatherCache.precipMm) : 1.0;
+    }
+    return RouteCore.rainFactorFor(weatherCache.precipMm);
+  }
+
   /* Effective traffic factor closure for the optimizer: base pattern blended
-   * with learned data (local + imported model) for this area + time. */
+   * with learned data (local + imported model) for this area + time,
+   * multiplied by the current rain factor. */
   function makeTrafficFn() {
     const local = loadTrafficLearn();
     const imported = loadTrafficModel();
-    // Merge imported model into a combined learn structure.
-    // Imported buckets are treated as additional samples.
     const combined = { buckets: { ...(local.buckets || {}) } };
     if (imported && imported.buckets) {
       for (const k in imported.buckets) {
         const ib = imported.buckets[k];
         if (!ib || !ib.n || !ib.ratio) continue;
         const cb = combined.buckets[k] || { n: 0, sum: 0 };
-        // Imported ratio -> convert back to sum: ratio * n
         cb.n += ib.n;
         cb.sum += ib.ratio * ib.n;
         combined.buckets[k] = cb;
@@ -990,8 +1013,9 @@
     }
     const now = new Date();
     const isWeekend = now.getDay() === 0 || now.getDay() === 6;
+    const rainF = currentRainFactor();
     return (departMin, lat, lng) => {
-      return RouteCore.learnedTrafficFactorAt(departMin, isWeekend, combined, lat, lng);
+      return RouteCore.learnedTrafficFactorAt(departMin, isWeekend, combined, lat, lng) * rainF;
     };
   }
   function startLegTracking(toStop, freeFlowMin) {
@@ -1003,6 +1027,7 @@
       toLat: toStop.lat, toLng: toStop.lng,
       toStopId: toStop.id,
       freeFlowMin: freeFlowMin || 0,
+      rainFactor: currentRainFactor(), // normalize learning for weather
       stationaryMs: 0,
       lastPos: devicePos ? { ...devicePos } : null,
       lastPosAt: Date.now(),
@@ -1045,16 +1070,18 @@
       if (leg.stationaryMs >= STATIONARY_DISCARD_MS) return;
       // Discard: absurd ratios (GPS glitch, forgot to check in, etc.)
       if (!leg.freeFlowMin || leg.freeFlowMin < 1) return;
-      const ratio = actualMin / leg.freeFlowMin;
-      if (ratio < 0.4 || ratio > 3.0) return;
-      // The ratio is actual / free-flow. But our base already includes the
-      // traffic factor — we want actual / (free * base) = learned adjustment.
-      // departMin for bucketing:
+      const rainF = leg.rainFactor || 1.0;
+      const actualNorm = actualMin / rainF;
+      const ratioNorm = actualNorm / leg.freeFlowMin;
+      if (ratioNorm < 0.4 || ratioNorm > 3.0) return;
+      // Normalize for weather and base traffic:
+      // adjustment = (actual / rainFactor) / (free * base).
+      // This keeps rainy drives from polluting the "normal" buckets.
       const departDate = new Date(leg.departAt);
       const departMin = departDate.getHours() * 60 + departDate.getMinutes();
       const isWeekend = departDate.getDay() === 0 || departDate.getDay() === 6;
       const base = RouteCore.trafficFactorAt(departMin);
-      const adjustment = ratio / base;
+      const adjustment = ratioNorm / base;
       const key = RouteCore.trafficBucketKey(departMin, isWeekend, leg.toLat, leg.toLng);
       const learn = loadTrafficLearn();
       RouteCore.recordTrafficSample(learn, key, adjustment);
@@ -2407,7 +2434,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-202750' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-203451' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
