@@ -1443,8 +1443,30 @@
     $('settingsSheet').hidden = false;
   };
   $('setStartGps').onclick = () => {
-    $('setStart').value = '';
-    toast('Default start cleared — will use GPS');
+    // Capture current GPS position and reverse-geocode it into the field,
+    // so "default start" becomes the office (or wherever you are now).
+    if (!('geolocation' in navigator)) { toast('GPS not available'); return; }
+    toast('Getting your location…');
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const lat = pos.coords.latitude.toFixed(6), lon = pos.coords.longitude.toFixed(6);
+      try {
+        const r = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+          { headers: { 'Accept': 'application/json' } });
+        const j = r.ok ? await r.json() : null;
+        const a = j && j.address ? j.address : null;
+        if (a) {
+          const num = a.house_number || '', road = a.road || '',
+                city = a.city || a.town || a.village || '',
+                state = a.state_code || a.state || '', zip = a.postcode || '';
+          const line1 = [num, road].filter(Boolean).join(' ').trim();
+          const line2 = [city, [state, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ').trim();
+          const addr = [line1, line2].filter(Boolean).join(', ');
+          if (addr) { $('setStart').value = addr; toast('Start address set to current location'); return; }
+        }
+        toast('Could not find address for this location');
+      } catch (e) { toast('Address lookup failed'); }
+    }, () => toast('Location unavailable'), { timeout: 10000 });
   };
   function updateModeHint() {
     const h = $('modeHint');
