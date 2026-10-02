@@ -6,7 +6,7 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261002-040831">
+<meta name="app-version" content="20261002-041216">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -24,7 +24,7 @@
     var local = stamped ? stamped.getAttribute('content') : '';
     // Skip if this is already a cache-busted reload (avoid loops).
     if (/[?&]v=/.test(location.search)) return;
-    if (!local || local.indexOf('20261002-040831') !== -1) return; // dev, unstamped
+    if (!local || local.indexOf('20261002-041216') !== -1) return; // dev, unstamped
     fetch('version.json', { cache: 'no-store' }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (info) {
@@ -180,6 +180,11 @@
       <span style="display:flex;gap:8px;align-items:center">
         <input id="setStart" placeholder="e.g. 123 Main St, Nashville, TN" style="flex:1">
         <button id="setStartGps" class="btn ghost" title="Use current location">📡</button>
+      </span></label>
+    <label class="set-row"><span>Default end address <small>(home — after last stop)</small></span>
+      <span style="display:flex;gap:8px;align-items:center">
+        <input id="setEnd" placeholder="e.g. 456 Oak Ave, Nashville, TN" style="flex:1">
+        <button id="setEndGps" class="btn ghost" title="Use current location">📡</button>
       </span></label>
     <label class="set-row check" id="setAutoCheckinRow"><span>Auto check-in at stops <small>(Work: GPS proximity)</small></span><input id="setAutoCheckin" type="checkbox"></label>
     <label class="set-row check" id="setAutoConfirmRow"><span>Auto-confirm all stops <small>(Work: uses screenshot times)</small></span><input id="setAutoConfirm" type="checkbox"></label>

@@ -20,10 +20,11 @@
     lastSchedule: null,  // {at, arrivals: {stopId: arrivalMin}} from last optimize
     checkedIn: null,     // {stopId, startedAt} — currently being serviced (v1.9)
     returnActive: false, // return-to-start was baked into the current optimization
+    endActive: false, // default end address was baked into the current optimization
     completedAt: null,   // timestamp when the last stop was marked done (auto-delete next day)
   };
   const settings = {
-    defaultStart: '', avoidTolls: false, avoidHwy: false,
+    defaultStart: '', defaultEnd: '', avoidTolls: false, avoidHwy: false,
     returnToStart: false, saveHistory: false, autoCheckin: false, autoConfirmAll: false, mode: 'work', // 'work' | 'personal'
     serviceTimes: { default: 45, byJobType: {}, known: [] },
   };
@@ -39,6 +40,7 @@
         preDriveMin: state.preDriveMin, preDriveSource: state.preDriveSource,
         warnSuppressed: state.warnSuppressed, lastSchedule: state.lastSchedule,
         checkedIn: state.checkedIn, returnActive: state.returnActive,
+        endActive: state.endActive,
         completedAt: state.completedAt,
       }));
       localStorage.setItem(LS_SET, JSON.stringify(settings));
@@ -71,7 +73,7 @@
           state.completedAt = null;
           state.optimized = false;
           state.lastSchedule = null;
-          state.returnActive = false;
+          state.returnActive = false; state.endActive = false;
           state.checkedIn = null;
         }
         state.matrixSource = r.matrixSource || null;
@@ -91,6 +93,7 @@
         if (r.checkedIn && !state.checkedIn) save(); // persist dropping a stale check-in
         state.lastSchedule = r.lastSchedule || null;
         state.returnActive = !!r.returnActive;
+        state.endActive = !!r.endActive;
       }
     } catch (e) {}
     /* sanitize service-time settings (forward-migration safe) */
@@ -224,7 +227,7 @@
     state.optimized = false; state.matrixSource = null;
     state.lastEstimate = null;
     state.preDriveMin = null; state.preDriveSource = null;
-    state.returnActive = false;
+    state.returnActive = false; state.endActive = false;
     // refresh the rough pre-optimization estimate from whatever is located
     const pts = locatedPoints();
     state.preEstimateMin = pts.length > 1 ? RouteCore.estimateMinutesHaversine(pts) : 0;
@@ -366,6 +369,15 @@
         '<span class="num">🏁</span>' +
         '<div class="info"><div class="addr">↩ Return to start</div>' +
         '<div class="meta"><span class="chip last">🏁 last stop</span></div></div>';
+      ul.appendChild(li);
+    }
+    if (state.endActive && state.optimized && settings.defaultEnd) {
+      const li = document.createElement('li');
+      li.className = 'stop is-last return-row';
+      li.innerHTML =
+        '<span class="num">🏠</span>' +
+        '<div class="info"><div class="addr">' + esc(settings.defaultEnd) + '</div>' +
+        '<div class="meta"><span class="chip last">🏠 home</span></div></div>';
       ul.appendChild(li);
     }
 
@@ -831,6 +843,23 @@
     return false;
   }
 
+  // Default end address coordinates (cached; re-geocoded when the setting changes).
+  let endCoordsCache = null, endCoordsFor = null;
+  async function getEndCoords() {
+    const addr = (settings.defaultEnd || '').trim();
+    if (!addr) return null;
+    if (endCoordsCache && endCoordsFor === addr) return endCoordsCache;
+    const tmp = { street: addr, city: '', state: '', zip: '' };
+    const ok = await geocodeCensusOne(tmp).catch(() => false) ||
+               await geocodeNominatim(tmp).catch(() => false);
+    if (ok && tmp.lat != null) {
+      endCoordsCache = { lat: tmp.lat, lng: tmp.lng };
+      endCoordsFor = addr;
+      return endCoordsCache;
+    }
+    return null;
+  }
+
   function getGps() {
     return new Promise((resolve) => {
       if (!navigator.geolocation) return resolve(null);
@@ -1043,6 +1072,17 @@
       const lastStop = active.find((s) => s.isLast && s.lat != null);
       let lastIdx = lastStop ? points.findIndex((p) => p._stopId === lastStop.id) : null;
       if (returnPt) lastIdx = points.length - 1; // the return always comes last
+      // default end address: pinned final destination after the last stop
+      // (e.g. home — the last appointment is "bossed up" so you head home after)
+      let endPt = null;
+      if (settings.defaultEnd && !returnPt) {
+        const ec = await getEndCoords();
+        if (ec) {
+          endPt = { lat: ec.lat, lng: ec.lng, _stopId: '__end' };
+          points.push(endPt);
+          lastIdx = points.length - 1; // the end address always comes last
+        }
+      }
       const firstStop = active.find((s) => s.isFirst && s.lat != null);
       const firstIdx = firstStop ? points.findIndex((p) => p._stopId === firstStop.id) : null;
 
@@ -1088,6 +1128,7 @@
         lastOptAt = Date.now(); // manual optimizes count for the auto-reopt anti-spam gate
         state.matrixSource = source;
         state.returnActive = !!returnPt;
+        state.endActive = !!endPt;
       // remember per-stop projected arrivals (popup defaults, at-risk checks)
       let risks = [];
       if (schedule) {
@@ -1279,6 +1320,7 @@
     // pass the stop objects themselves — core.js stopLabel() builds the address text
     const ordered = remaining.slice();
     if (settings.returnToStart) ordered.push({ street: originLabel() });
+    else if (settings.defaultEnd) ordered.push({ street: settings.defaultEnd });
     const avoid = [];
     if (settings.avoidTolls) avoid.push('tolls');
     if (settings.avoidHwy) avoid.push('highways');
@@ -1492,14 +1534,19 @@
     if (state.returnActive && state.optimized && state.origin.lat != null) {
       pts.push({ lat: state.origin.lat, lng: state.origin.lng, _return: true });
     }
+    // default end address: show it as the final destination
+    if (state.endActive && state.optimized && endCoordsCache) {
+      pts.push({ lat: endCoordsCache.lat, lng: endCoordsCache.lng, _end: true });
+    }
     pts.forEach((s, i) => {
-      const cls = 'pin-num' + (s.isLast ? ' last' : '') + (s.isFirst ? ' first' : '') + (s.done ? ' done' : '') + (s._return ? ' ret' : '');
-      const label = s._origin ? '📍' : s._return ? '↩' : (s.isFirst ? '🚩' : (s.isLast ? '🏁' : String(i + (state.origin.lat != null ? 0 : 1))));
+      const cls = 'pin-num' + (s.isLast ? ' last' : '') + (s.isFirst ? ' first' : '') + (s.done ? ' done' : '') + (s._return || s._end ? ' ret' : '');
+      const label = s._origin ? '📍' : s._return ? '↩' : s._end ? '🏠' : (s.isFirst ? '🚩' : (s.isLast ? '🏁' : String(i + (state.origin.lat != null ? 0 : 1))));
       const m = L.marker([s.lat, s.lng], {
         icon: L.divIcon({ className: '', html: '<div class="' + cls + '">' + esc(label) + '</div>', iconSize: [28, 28] }),
       }).addTo(mapObj);
-      if (!s._origin && !s._return) m.bindPopup(esc(stopLabel(s)));
+      if (!s._origin && !s._return && !s._end) m.bindPopup(esc(stopLabel(s)));
       if (s._return) m.bindPopup('↩ Return to start');
+      if (s._end) m.bindPopup('🏠 ' + esc(settings.defaultEnd || 'Home'));
       mapLayers.push(m);
     });
     const line = pts.filter((p) => !p._origin || true);
@@ -1539,7 +1586,7 @@
     state.warnSuppressed = false; // new route: at-risk warnings come back
     state.checkedIn = null;
     state.lastSchedule = null;
-    state.returnActive = false;
+    state.returnActive = false; state.endActive = false;
     $('mapWrap').hidden = true;
     $('mapToggle').textContent = '🗺 Map';
     wipeRouteData();
@@ -1616,6 +1663,7 @@
   /* ---------- settings ---------- */
   $('settingsBtn').onclick = () => {
     $('setStart').value = settings.defaultStart;
+    $('setEnd').value = settings.defaultEnd || '';
     $('setTolls').checked = settings.avoidTolls;
     $('setHwy').checked = settings.avoidHwy;
     $('setReturn').checked = settings.returnToStart;
@@ -1653,6 +1701,32 @@
       } catch (e) { toast('Address lookup failed'); }
     }, () => toast('Location unavailable'), { timeout: 10000 });
   };
+  $('setEndGps').onclick = () => {
+    // Capture current GPS position and reverse-geocode it into the end field,
+    // so "default end" becomes home (or wherever you're headed after work).
+    if (!('geolocation' in navigator)) { toast('GPS not available'); return; }
+    toast('Getting your location…');
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const lat = pos.coords.latitude.toFixed(6), lon = pos.coords.longitude.toFixed(6);
+      try {
+        const r = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+          { headers: { 'Accept': 'application/json' } });
+        const j = r.ok ? await r.json() : null;
+        const a = j && j.address ? j.address : null;
+        if (a) {
+          const num = a.house_number || '', road = a.road || '',
+                city = a.city || a.town || a.village || '',
+                state = a.state_code || a.state || '', zip = a.postcode || '';
+          const line1 = [num, road].filter(Boolean).join(' ').trim();
+          const line2 = [city, [state, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ').trim();
+          const addr = [line1, line2].filter(Boolean).join(', ');
+          if (addr) { $('setEnd').value = addr; toast('End address set to current location'); return; }
+        }
+        toast('Could not find address for this location');
+      } catch (e) { toast('Address lookup failed'); }
+    }, () => toast('Location unavailable'), { timeout: 10000 });
+  };
   function updateModeHint() {
     const h = $('modeHint');
     if (h) h.textContent = isWorkMode()
@@ -1673,6 +1747,7 @@
   $('settingsClose').onclick = () => {
     const retBefore = settings.returnToStart;
     settings.defaultStart = $('setStart').value.trim();
+    settings.defaultEnd = $('setEnd').value.trim();
     settings.avoidTolls = $('setTolls').checked;
     settings.avoidHwy = $('setHwy').checked;
     settings.returnToStart = $('setReturn').checked;
@@ -1683,7 +1758,7 @@
     settings.autoConfirmAll = $('setAutoConfirm').checked;
     if (settings.returnToStart !== retBefore) {
       // the route shape changed (return leg added/removed) — re-optimize needed
-      state.optimized = false; state.returnActive = false;
+      state.optimized = false; state.returnActive = false; state.endActive = false;
     }
     save();
     if (settings.autoCheckin !== acBefore) {
@@ -1900,7 +1975,7 @@
           state.stops.length && state.stops.every((x) => x.done)) {
         wipeRouteData();
         state.stops = []; state.completedAt = null;
-        state.optimized = false; state.lastSchedule = null; state.returnActive = false;
+        state.optimized = false; state.lastSchedule = null; state.returnActive = false; state.endActive = false;
         save(); render();
         toast('Yesterday\'s completed route was cleared');
       }
