@@ -24,7 +24,7 @@
   };
   const settings = {
     defaultStart: '', avoidTolls: false, avoidHwy: false,
-    returnToStart: false, saveHistory: false, autoCheckin: false, mode: 'work', // 'work' | 'personal'
+    returnToStart: false, saveHistory: false, autoCheckin: false, autoConfirmAll: false, mode: 'work', // 'work' | 'personal'
     serviceTimes: { default: 45, byJobType: {}, known: [] },
   };
   const isWorkMode = () => settings.mode !== 'personal';
@@ -681,15 +681,20 @@
               jobType: '', apptMin: null,
             }));
           }
-          parsed.forEach((p) => all.push({
-            id: uid(), street: p.street, city: p.city, state: p.state, zip: p.zip,
-            jobType: p.jobType || '', note: '', lat: null, lng: null, geocodeSource: null,
-            done: false, isLast: false, isFirst: false,
-            // Screenshot times are stored but NOT auto-confirmed. Tapping the
-            // clock pre-fills the window from apptMin (see openWindowPopup).
-            confirmed: false, twStart: null, twEnd: null,
-            apptMin: (p.apptMin != null ? p.apptMin : null), source: 'ocr',
-          }));
+          parsed.forEach((p) => {
+            const autoConfirm = settings.autoConfirmAll && p.apptMin != null;
+            all.push({
+              id: uid(), street: p.street, city: p.city, state: p.state, zip: p.zip,
+              jobType: p.jobType || '', note: '', lat: null, lng: null, geocodeSource: null,
+              done: false, isLast: false, isFirst: false,
+              // Screenshot times are stored but NOT auto-confirmed unless the
+              // Work setting is on. Tapping the clock pre-fills from apptMin.
+              confirmed: autoConfirm,
+              twStart: autoConfirm ? p.apptMin : null,
+              twEnd: autoConfirm ? (p.twEnd != null ? p.twEnd : p.apptMin + 120) : null,
+              apptMin: (p.apptMin != null ? p.apptMin : null), source: 'ocr',
+            });
+          });
         } catch (err) { console.warn('OCR failed for one image', err); }
       }
       await RR_OCR.done();
@@ -1515,6 +1520,7 @@
     $('setReturn').checked = settings.returnToStart;
     $('setHistory').checked = settings.saveHistory;
     $('setAutoCheckin').checked = !!settings.autoCheckin;
+    $('setAutoConfirm').checked = !!settings.autoConfirmAll;
     $('setMode').value = settings.mode || 'work';
     updateModeHint();
     renderServiceTimes();
@@ -1553,6 +1559,8 @@
       : 'Personal mode: just stops — first/last pins stay, work features hide.';
     const acr = $('setAutoCheckinRow');
     if (acr) acr.style.display = isWorkMode() ? '' : 'none';
+    const acfr = $('setAutoConfirmRow');
+    if (acfr) acfr.style.display = isWorkMode() ? '' : 'none';
   }
   $('setMode').addEventListener('change', () => {
     settings.mode = $('setMode').value === 'personal' ? 'personal' : 'work';
@@ -1570,6 +1578,8 @@
     settings.saveHistory = $('setHistory').checked;
     const acBefore = !!settings.autoCheckin;
     settings.autoCheckin = $('setAutoCheckin').checked;
+    const acfBefore = !!settings.autoConfirmAll;
+    settings.autoConfirmAll = $('setAutoConfirm').checked;
     if (settings.returnToStart !== retBefore) {
       // the route shape changed (return leg added/removed) — re-optimize needed
       state.optimized = false; state.returnActive = false;
@@ -1579,6 +1589,18 @@
       if (settings.autoCheckin) startAutoCheckinWatch();
       else stopAutoCheckinWatch();
       toast(settings.autoCheckin ? 'Auto check-in on — GPS will check you in at stops' : 'Auto check-in off');
+    }
+    if (settings.autoConfirmAll && !acfBefore) {
+      // Just turned on: confirm all stops that have a screenshot time.
+      let n = 0;
+      for (const s of state.stops) {
+        if (!s.confirmed && s.apptMin != null) {
+          s.confirmed = true; s.twStart = s.apptMin;
+          s.twEnd = s.twEnd != null ? s.twEnd : s.apptMin + 120;
+          n++;
+        }
+      }
+      if (n) { save(); toast('✓ ' + n + ' stop' + (n === 1 ? '' : 's') + ' auto-confirmed'); }
     }
     if (settings.returnToStart !== retBefore) {
       toast(settings.returnToStart
