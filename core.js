@@ -560,7 +560,7 @@ function optimizeRouteAsync(points, opts) {
       source: r.source,
       matrix: r.matrix, /* v1.4: exposed so callers can score any order */
       durMin: durMin,   /* v1.9: drive minutes, parallel to matrix */
-      schedule: sctx.anyWindow ? simulateSchedule(order, durMin, sctx) : null
+      schedule: (sctx.anyWindow || o.forceSchedule) ? simulateSchedule(order, durMin, sctx) : null
     };
   });
 }

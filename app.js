@@ -152,6 +152,7 @@
   /* ---------- service times (v1.9) ---------- */
   const SVC_MIN = 15, SVC_MAX = 180, SVC_STEP = 5, SVC_DEFAULT = 45;
   function serviceMinFor(s) {
+    if (!isWorkMode()) return 0; // personal mode: ETAs are pure drive time
     const st = settings.serviceTimes;
     const jt = s && s.jobType ? String(s.jobType) : '';
     if (jt && st.byJobType[jt] != null) return st.byJobType[jt];
@@ -921,6 +922,7 @@
       const { order, source, matrix, durMin, schedule } = await RouteCore.optimizeRouteAsync(points, {
         startIdx: Math.max(0, startIdx), firstIdx, lastIdx, fetchFn: fetch.bind(window),
         windows, serviceMin, departMin: departMin, bufferMin: 30,
+        forceSchedule: !isWorkMode(), // personal mode: ETAs from pure drive time
       });
       // before/after from the SAME matrix: apples-to-apples savings
       const beforeMin = RouteCore.routeMinutesForOrder(matrix, beforeOrder, source);
