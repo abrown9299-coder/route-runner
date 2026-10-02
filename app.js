@@ -489,6 +489,23 @@
       if (state.checkedIn && state.checkedIn.stopId === s.id) state.checkedIn = null;
       const idx = state.stops.indexOf(s);
       state.stops.splice(idx, 1);
+      // Last stop deleted: full cleanup so no stale schedule/summary survives.
+      // (The drive summary must disappear when the route is empty.)
+      if (!state.stops.length) {
+        state.optimized = false;
+        state.matrixSource = null;
+        state.lastEstimate = null;
+        state.preEstimateMin = 0;
+        state.preDriveMin = null; state.preDriveSource = null;
+        state.lastSchedule = null;
+        state.returnActive = false; state.endActive = false;
+        state.geocoding = false;
+        state.geocodeStatus = '';
+        state.pinModeStopId = null;
+        geocodeInflight = null;
+        state.warnSuppressed = false;
+        wipeRouteData();
+      }
       markDirty();
       toast('Stop removed', { label: 'Undo', fn: () => {
         state.stops.splice(Math.min(idx, state.stops.length), 0, s);

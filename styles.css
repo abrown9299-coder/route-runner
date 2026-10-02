@@ -1,3 +1,5 @@
+/* The hidden attribute must always win over display rules. */
+[hidden] { display: none !important; }
 :root {
   --bg: #0a0c14;
   --bg2: #10131f;
@@ -204,6 +206,7 @@ main { padding: 14px 14px 0; max-width: 640px; margin: 0 auto; }
   padding: 8px 16px; margin: 0 0 8px; font-size: 13px; color: var(--text-dim);
   background: var(--card); border: 1px solid var(--border); border-radius: 12px;
 }
+.drive-summary[hidden] { display: none !important; }
 .drive-summary strong { color: var(--text); font-weight: 600; }
 .stop .acts { display: flex; gap: 2px; align-items: center; }
 .stop .acts button {
