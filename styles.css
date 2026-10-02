@@ -274,6 +274,11 @@ button.link { background: none; border: none; color: var(--accent); font-size: 1
 .pin-num.last { background: #000; border-style: dashed; }
 .pin-num.first { background: #14532d; border-style: solid; border-color: #4ade80; }
 .pin-num.done { background: var(--green); }
+.you-dot {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #2f7bff; border: 2px solid #fff;
+  box-shadow: 0 0 0 2px rgba(47,123,255,.35);
+}
 .pin-num.ret { background: linear-gradient(135deg, #0ea5e9, #0284c7); border-style: solid; border-color: #bae6fd; }
 
 /* Action bar */

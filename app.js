@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-164740';
+  const RR_BUILD = '20261002-170306';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -1720,13 +1720,15 @@
     // "You are here" blue dot — always drawn when the device position is known.
     // The dot IS the GPS origin; no separate pin is drawn for it.
     if (devicePos) {
-      const dot = L.circleMarker([devicePos.lat, devicePos.lng], {
-        radius: 9, color: '#ffffff', weight: 2, fillColor: '#2f7bff', fillOpacity: 1,
+      // Blue dot as a marker (not circleMarker) so it lives in the marker pane
+      // and renders above the stop pins via zIndexOffset.
+      const dot = L.marker([devicePos.lat, devicePos.lng], {
+        icon: L.divIcon({ className: '', html: '<div class="you-dot"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }),
+        zIndexOffset: 1000,
       }).addTo(mapObj);
       dot.bindPopup('You are here');
       mapLayers.push(dot);
       deviceDot = dot;
-      dot.bringToFront(); // always on top of stop pins
     }
     const boundPts = pts.map((p) => [p.lat, p.lng]);
     if (devicePos) boundPts.push([devicePos.lat, devicePos.lng]);
@@ -2134,7 +2136,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-164740' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-170306' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
