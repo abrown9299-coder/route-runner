@@ -1,5 +1,5 @@
-/* RouteRunner service worker — offline app shell. 20261002-030327 is stamped by dev/deploy.py. */
-const CACHE = 'routerunner-20261002-030327';
+/* RouteRunner service worker — offline app shell. 20261002-031304 is stamped by dev/deploy.py. */
+const CACHE = 'routerunner-20261002-031304';
 const SHELL = [
   './', './index.html', './styles.css', './app.js', './core.js', './ocr.js',
   './manifest.json', './icon-192.png', './icon-512.png',
@@ -26,18 +26,17 @@ self.addEventListener('fetch', (e) => {
   // version.json must always be fresh — it's how the app learns about updates.
   if (url.pathname.endsWith('/version.json')) return;
   if (e.request.method !== 'GET') return;
+  // NETWORK-FIRST for the app shell: stale code is worse than a slow load.
+  // Try the network, fall back to cache only when offline.
   e.respondWith(
-    caches.match(e.request).then((hit) => {
-      if (hit) return hit;
-      return fetch(e.request).then((res) => {
-        const sameOrigin = url.origin === self.location.origin;
-        const cdnOk = CDN.some((c) => e.request.url.startsWith(c));
-        if (res.ok && (sameOrigin || cdnOk)) {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy));
-        }
-        return res;
-      }).catch(() => caches.match('./index.html'));
-    })
+    fetch(e.request).then((res) => {
+      const sameOrigin = url.origin === self.location.origin;
+      const cdnOk = CDN.some((c) => e.request.url.startsWith(c));
+      if (res.ok && (sameOrigin || cdnOk)) {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(e.request, copy));
+      }
+      return res;
+    }).catch(() => caches.match(e.request).then((hit) => hit || caches.match('./index.html')))
   );
 });

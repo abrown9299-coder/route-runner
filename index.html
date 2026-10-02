@@ -6,7 +6,7 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261002-030327">
+<meta name="app-version" content="20261002-031304">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -14,6 +14,29 @@
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<script>
+/* Stale-code gate: runs before anything else. If this HTML is stale
+ * (cached by SW or browser), the version won't match version.json and we
+ * force a cache-busting reload immediately. */
+(function () {
+  try {
+    var stamped = document.querySelector('meta[name="app-version"]');
+    var local = stamped ? stamped.getAttribute('content') : '';
+    // Skip if this is already a cache-busted reload (avoid loops).
+    if (/[?&]v=/.test(location.search)) return;
+    if (!local || local.indexOf('20261002-031304') !== -1) return; // dev, unstamped
+    fetch('version.json', { cache: 'no-store' }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (info) {
+      if (info && info.version && info.version !== local) {
+        var u = new URL(location.href);
+        u.searchParams.set('v', info.version);
+        location.replace(u.toString());
+      }
+    }).catch(function () {});
+  } catch (e) {}
+})();
+</script>
 </head>
 <body>
 
