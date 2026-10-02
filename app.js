@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-161549';
+  const RR_BUILD = '20261002-163925';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -1696,7 +1696,9 @@
     }
     pts.forEach((s, i) => {
       const cls = 'pin-num' + (s.isLast ? ' last' : '') + (s.isFirst ? ' first' : '') + (s.done ? ' done' : '') + (s._return || s._end ? ' ret' : '');
-      const label = s._origin ? '📍' : s._return ? '↩' : s._end ? '🏠' : (s.isFirst ? '🚩' : (s.isLast ? '🏁' : String(i + (state.origin.lat != null ? 0 : 1))));
+      // 1-based numbering: the blue dot is your position, stops start at 1.
+      const stopNum = pts.slice(0, i + 1).filter((p) => !p._origin && !p._return && !p._end).length;
+      const label = s._origin ? '📍' : s._return ? '↩' : s._end ? '🏠' : (s.isFirst ? '🚩' : (s.isLast ? '🏁' : String(stopNum)));
       const m = L.marker([s.lat, s.lng], {
         icon: L.divIcon({ className: '', html: '<div class="' + cls + '">' + esc(label) + '</div>', iconSize: [28, 28] }),
       }).addTo(mapObj);
@@ -1705,9 +1707,14 @@
       if (s._end) m.bindPopup('🏠 ' + esc(settings.defaultEnd || 'Home'));
       mapLayers.push(m);
     });
-    const line = pts.filter((p) => !p._origin || true);
-    if (line.length > 1) {
-      const pl = L.polyline(line.map((p) => [p.lat, p.lng]), { color: '#7c5cff', weight: 4 }).addTo(mapObj);
+    // Active route line: from your blue dot through remaining (not-done) stops only.
+    // Done stops stay visible as markers but are out of the route line.
+    const remaining = pts.filter((p) => !p.done && !p._origin);
+    const linePts = [];
+    if (devicePos) linePts.push([devicePos.lat, devicePos.lng]);
+    remaining.forEach((p) => linePts.push([p.lat, p.lng]));
+    if (linePts.length > 1) {
+      const pl = L.polyline(linePts, { color: '#7c5cff', weight: 4 }).addTo(mapObj);
       mapLayers.push(pl);
     }
     // "You are here" blue dot — always drawn when the device position is known.
@@ -1784,11 +1791,13 @@
       Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
     return 2 * R * Math.asin(Math.sqrt(h));
   }
-  function checkProximityCheckin(lat, lng) {
+  function checkProximityCheckin(lat, lng, accuracy) {
     if (!isWorkMode() || !settings.autoCheckin) return;
     if (state.checkedIn) return; // already in service somewhere
-    // find the nearest not-done stop with coordinates within 150m
-    let best = null, bestD = 150;
+    // Reject inaccurate fixes: a 500m-accuracy reading "near" a stop is meaningless.
+    if (accuracy != null && accuracy > 75) return;
+    // find the nearest not-done stop with coordinates within 100m
+    let best = null, bestD = 100;
     for (const s of state.stops) {
       if (s.done || s.lat == null || s.lng == null) continue;
       const d = haversineM(lat, lng, s.lat, s.lng);
@@ -1808,14 +1817,14 @@
     if (!isWorkMode() || !settings.autoCheckin) return;
     try {
       autoCheckinWatchId = navigator.geolocation.watchPosition((pos) => {
-        checkProximityCheckin(pos.coords.latitude, pos.coords.longitude);
+        checkProximityCheckin(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
       }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
       // Fallback: iOS suspends watchPosition when backgrounded. Poll every 60s
       // and check immediately when the app becomes visible.
       proximityIntervalId = setInterval(() => {
         if (!isWorkMode() || !settings.autoCheckin || state.checkedIn) return;
         navigator.geolocation.getCurrentPosition((pos) => {
-          checkProximityCheckin(pos.coords.latitude, pos.coords.longitude);
+          checkProximityCheckin(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
         }, () => {}, { enableHighAccuracy: true, maximumAge: 60000, timeout: 15000 });
       }, 60000);
     } catch (e) {}
@@ -2124,7 +2133,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-161549' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-163925' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
@@ -2256,7 +2265,7 @@
       // so check immediately when the app becomes visible.
       if (isWorkMode() && settings.autoCheckin && !state.checkedIn && 'geolocation' in navigator) {
         navigator.geolocation.getCurrentPosition((pos) => {
-          checkProximityCheckin(pos.coords.latitude, pos.coords.longitude);
+          checkProximityCheckin(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
         }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
       }
     } // reopened: fresh times + re-route
