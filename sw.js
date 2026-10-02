@@ -1,5 +1,5 @@
-/* RouteRunner service worker — offline app shell. 20261002-022334 is stamped by dev/deploy.py. */
-const CACHE = 'routerunner-20261002-022334';
+/* RouteRunner service worker — offline app shell. 20261002-022712 is stamped by dev/deploy.py. */
+const CACHE = 'routerunner-20261002-022712';
 const SHELL = [
   './', './index.html', './styles.css', './app.js', './core.js', './ocr.js',
   './manifest.json', './icon-192.png', './icon-512.png',

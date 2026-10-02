@@ -24,7 +24,7 @@
   };
   const settings = {
     defaultStart: '', avoidTolls: false, avoidHwy: false,
-    returnToStart: false, saveHistory: false, mode: 'work', // 'work' | 'personal'
+    returnToStart: false, saveHistory: false, autoCheckin: false, mode: 'work', // 'work' | 'personal'
     serviceTimes: { default: 45, byJobType: {}, known: [] },
   };
   const isWorkMode = () => settings.mode !== 'personal';
@@ -430,8 +430,7 @@
       save(); render();
       maybeAutoReopt('checkin'); // departure moved: re-route around it
     }
-    else if (act === 'first') {
-      state.stops.forEach((x) => { if (x !== s) x.isFirst = false; });
+    else if (act === 'first') {      state.stops.forEach((x) => { if (x !== s) x.isFirst = false; });
       s.isFirst = !s.isFirst;
       if (s.isFirst) s.isLast = false; // a stop can't be both first and last
       markDirty(s.isFirst ? '🚩 will be routed first' : 'First-stop pin removed');
@@ -498,7 +497,9 @@
       $('winOk').textContent = '✓ Update window';
       $('winRemove').hidden = false;
     } else {
-      let start = plannedArrivalMin(s);
+      // New window: prefer the screenshot's appointment time if we have one,
+      // otherwise fall back to planned arrival. Always a 2-hour window.
+      let start = s.apptMin != null ? s.apptMin : plannedArrivalMin(s);
       if (start == null) {
         const n = new Date();
         start = Math.ceil((n.getHours() * 60 + n.getMinutes() + 1) / 15) * 15 % 1440;
@@ -662,11 +663,9 @@
             id: uid(), street: p.street, city: p.city, state: p.state, zip: p.zip,
             jobType: p.jobType || '', note: '', lat: null, lng: null, geocodeSource: null,
             done: false, isLast: false, isFirst: false,
-            // Exact times from screenshots become confirmed 1-hour windows.
-            // Full windows stay as-is.
-            confirmed: p.apptMin != null,
-            twStart: p.apptMin,
-            twEnd: p.twEnd != null ? p.twEnd : (p.apptMin != null ? p.apptMin + 60 : null),
+            // Screenshot times are stored but NOT auto-confirmed. Tapping the
+            // clock pre-fills the window from apptMin (see openWindowPopup).
+            confirmed: false, twStart: null, twEnd: null,
             apptMin: (p.apptMin != null ? p.apptMin : null), source: 'ocr',
           }));
         } catch (err) { console.warn('OCR failed for one image', err); }
@@ -1442,6 +1441,47 @@
     location.reload();
   };
 
+  /* ---------- auto check-in (work mode, GPS proximity) ---------- */
+  let autoCheckinWatchId = null;
+  function haversineM(aLat, aLng, bLat, bLng) {
+    const R = 6371000, toRad = (d) => d * Math.PI / 180;
+    const dLat = toRad(bLat - aLat), dLng = toRad(bLng - aLng);
+    const h = Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+  function startAutoCheckinWatch() {
+    stopAutoCheckinWatch();
+    if (!('geolocation' in navigator)) return;
+    if (!isWorkMode() || !settings.autoCheckin) return;
+    try {
+      autoCheckinWatchId = navigator.geolocation.watchPosition((pos) => {
+        if (!isWorkMode() || !settings.autoCheckin) return;
+        if (state.checkedIn) return; // already in service somewhere
+        const lat = pos.coords.latitude, lng = pos.coords.longitude;
+        // find the nearest not-done stop with coordinates within 100m
+        let best = null, bestD = 100;
+        for (const s of state.stops) {
+          if (s.done || s.lat == null || s.lng == null) continue;
+          const d = haversineM(lat, lng, s.lat, s.lng);
+          if (d < bestD) { bestD = d; best = s; }
+        }
+        if (best) {
+          state.checkedIn = { stopId: best.id, startedAt: Date.now(), auto: true };
+          save(); render();
+          toast('📍 Auto checked in — ' + serviceMinFor(best) + ' min service timer running');
+          maybeAutoReopt('checkin');
+        }
+      }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
+    } catch (e) {}
+  }
+  function stopAutoCheckinWatch() {
+    if (autoCheckinWatchId != null && 'geolocation' in navigator) {
+      try { navigator.geolocation.clearWatch(autoCheckinWatchId); } catch (e) {}
+    }
+    autoCheckinWatchId = null;
+  }
+
   /* ---------- settings ---------- */
   $('settingsBtn').onclick = () => {
     $('setStart').value = settings.defaultStart;
@@ -1449,6 +1489,7 @@
     $('setHwy').checked = settings.avoidHwy;
     $('setReturn').checked = settings.returnToStart;
     $('setHistory').checked = settings.saveHistory;
+    $('setAutoCheckin').checked = !!settings.autoCheckin;
     $('setMode').value = settings.mode || 'work';
     updateModeHint();
     renderServiceTimes();
@@ -1485,10 +1526,14 @@
     if (h) h.textContent = isWorkMode()
       ? 'Work mode: confirmed windows, check-in, notes, job types.'
       : 'Personal mode: just stops — first/last pins stay, work features hide.';
+    const acr = $('setAutoCheckinRow');
+    if (acr) acr.style.display = isWorkMode() ? '' : 'none';
   }
   $('setMode').addEventListener('change', () => {
     settings.mode = $('setMode').value === 'personal' ? 'personal' : 'work';
     save(); updateModeHint(); renderServiceTimes(); render();
+    if (settings.mode === 'personal') stopAutoCheckinWatch();
+    else if (settings.autoCheckin) startAutoCheckinWatch();
     toast(settings.mode === 'personal' ? 'Personal mode — work features hidden' : 'Work mode');
   });
   $('settingsClose').onclick = () => {
@@ -1498,11 +1543,18 @@
     settings.avoidHwy = $('setHwy').checked;
     settings.returnToStart = $('setReturn').checked;
     settings.saveHistory = $('setHistory').checked;
+    const acBefore = !!settings.autoCheckin;
+    settings.autoCheckin = $('setAutoCheckin').checked;
     if (settings.returnToStart !== retBefore) {
       // the route shape changed (return leg added/removed) — re-optimize needed
       state.optimized = false; state.returnActive = false;
     }
     save();
+    if (settings.autoCheckin !== acBefore) {
+      if (settings.autoCheckin) startAutoCheckinWatch();
+      else stopAutoCheckinWatch();
+      toast(settings.autoCheckin ? 'Auto check-in on — GPS will check you in at stops' : 'Auto check-in off');
+    }
     if (settings.returnToStart !== retBefore) {
       toast(settings.returnToStart
         ? 'Return to start on — tap ⚡ Optimize to rebuild the route'
@@ -1698,6 +1750,8 @@
   } catch (e) {}
   restoreUIState();
   checkForUpdate();
+  // Resume auto check-in watch if it was on (work mode only).
+  if (settings.autoCheckin && isWorkMode()) startAutoCheckinWatch();
   // Ask for location services right on launch: the permission prompt appears
   // immediately, and the map can show "you are here" before optimize runs.
   if (state.origin.type === 'gps' && state.origin.lat == null) {
