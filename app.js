@@ -1272,13 +1272,18 @@
     mapLayers = [];
     const pts = state.stops.filter((s) => s.lat != null);
     if (state.origin.lat != null) pts.unshift({ lat: state.origin.lat, lng: state.origin.lng, _origin: true });
+    // return-to-start: show the origin again as the final destination
+    if (state.returnActive && state.optimized && state.origin.lat != null) {
+      pts.push({ lat: state.origin.lat, lng: state.origin.lng, _return: true });
+    }
     pts.forEach((s, i) => {
-      const cls = 'pin-num' + (s.isLast ? ' last' : '') + (s.isFirst ? ' first' : '') + (s.done ? ' done' : '');
-      const label = s._origin ? '📍' : (s.isFirst ? '🚩' : (s.isLast ? '🏁' : String(i + (state.origin.lat != null ? 0 : 1))));
+      const cls = 'pin-num' + (s.isLast ? ' last' : '') + (s.isFirst ? ' first' : '') + (s.done ? ' done' : '') + (s._return ? ' ret' : '');
+      const label = s._origin ? '📍' : s._return ? '↩' : (s.isFirst ? '🚩' : (s.isLast ? '🏁' : String(i + (state.origin.lat != null ? 0 : 1))));
       const m = L.marker([s.lat, s.lng], {
         icon: L.divIcon({ className: '', html: '<div class="' + cls + '">' + esc(label) + '</div>', iconSize: [28, 28] }),
       }).addTo(mapObj);
-      if (!s._origin) m.bindPopup(esc(stopLabel(s)));
+      if (!s._origin && !s._return) m.bindPopup(esc(stopLabel(s)));
+      if (s._return) m.bindPopup('↩ Return to start');
       mapLayers.push(m);
     });
     const line = pts.filter((p) => !p._origin || true);
