@@ -513,6 +513,81 @@ function schedCtx(o, n) {
   };
 }
 
+/* Early-arrival opportunity: sometimes going to the NEXT stop first (arriving
+ * early for its window) saves meaningful drive time while still meeting the
+ * current stop's window. This finds the best such swap.
+ *
+ * Returns null or {swapIdx, earlyStop, earlyByMin, savedMin, newOrder}.
+ * - swapIdx: position in `order` of the first stop in the swapped pair
+ * - earlyStop: point index of the stop you'd visit early
+ * - earlyByMin: how many minutes before its window start you'd arrive
+ * - savedMin: drive minutes saved vs the current order
+ * - newOrder: the order with the pair swapped
+ *
+ * Only suggests when savings >= 10 min and earliness <= 30 min. The user
+ * decides — this never auto-applies. */
+var EARLY_MAX_MIN = 30;   /* never suggest more than 30 min early */
+var EARLY_MIN_SAVE = 10;  /* only suggest when saving 10+ min of driving */
+function findEarlyArrivalOpportunity(order, durMin, ctx) {
+  var c = ctx || {};
+  var windows = c.windows || [];
+  var bufferMin = (c.bufferMin !== null && c.bufferMin !== undefined) ? c.bufferMin : WINDOW_BUFFER_MIN;
+  var ord = order || [];
+  if (ord.length < 3) return null; /* need origin + at least 2 stops */
+
+  var best = null;
+  /* Try swapping each consecutive pair (skip origin at position 0). */
+  for (var i = 1; i < ord.length - 1; i++) {
+    var aPt = ord[i], bPt = ord[i + 1];
+    var wA = windows[aPt], wB = windows[bPt];
+    /* Both stops need windows for this to make sense. */
+    if (!wA || wA.start === null || wA.start === undefined) continue;
+    if (!wB || wB.start === null || wB.start === undefined) continue;
+
+    /* Build the swapped order. */
+    var swapped = ord.slice();
+    swapped[i] = bPt;
+    swapped[i + 1] = aPt;
+
+    /* Simulate both orders. */
+    var simOrig = simulateSchedule(ord, durMin, c);
+    var simSwap = simulateSchedule(swapped, durMin, c);
+
+    /* The swapped order must not create NEW violations. */
+    var origViolated = {};
+    for (var v = 0; v < simOrig.violations.length; v++) origViolated[simOrig.violations[v].point] = true;
+    var newViolation = false;
+    for (var v2 = 0; v2 < simSwap.violations.length; v2++) {
+      if (!origViolated[simSwap.violations[v2].point]) { newViolation = true; break; }
+    }
+    if (newViolation) continue;
+
+    /* Find B's arrival in the swapped order — it should be early. */
+    var bLeg = null;
+    for (var l = 0; l < simSwap.legs.length; l++) {
+      if (simSwap.legs[l].point === bPt) { bLeg = simSwap.legs[l]; break; }
+    }
+    if (!bLeg || bLeg.waitMin === null || bLeg.waitMin === undefined) continue;
+    var earlyBy = bLeg.waitMin;
+    if (earlyBy <= 0 || earlyBy > EARLY_MAX_MIN) continue;
+
+    /* Drive time savings. */
+    var saved = simOrig.driveMin - simSwap.driveMin;
+    if (saved < EARLY_MIN_SAVE) continue;
+
+    if (!best || saved > best.savedMin) {
+      best = {
+        swapIdx: i,
+        earlyStop: bPt,
+        earlyByMin: Math.round(earlyBy),
+        savedMin: Math.round(saved),
+        newOrder: swapped,
+      };
+    }
+  }
+  return best;
+}
+
 /* Walk `order` over a drive-minute matrix, applying service durations and
  * arrival windows. Returns {legs, driveMin, violations}.
  * legs[i]: {point, arrivalMin, waitMin, lateMin, winStart, winEnd, effEnd}
@@ -1046,7 +1121,8 @@ var RouteCore = {
   minutesMatrix: minutesMatrix,
   simulateSchedule: simulateSchedule,
   scheduleCost: scheduleCost,
-  costLess: costLess
+  costLess: costLess,
+  findEarlyArrivalOpportunity: findEarlyArrivalOpportunity
 };
 
 if (typeof module !== 'undefined' && module.exports) {

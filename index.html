@@ -6,13 +6,13 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261002-180138">
+<meta name="app-version" content="20261002-195403">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" type="image/png" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20261002-180138">
+<link rel="stylesheet" href="styles.css?v=20261002-195403">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <script>
 /* Stale-code gate: runs before anything else. If this HTML is stale
@@ -24,7 +24,7 @@
     var local = stamped ? stamped.getAttribute('content') : '';
     // Skip if this is already a cache-busted reload (avoid loops).
     if (/[?&]v=/.test(location.search)) return;
-    if (!local || local.indexOf('20261002-180138') !== -1) return; // dev, unstamped
+    if (!local || local.indexOf('20261002-195403') !== -1) return; // dev, unstamped
     fetch('version.json', { cache: 'no-store' }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (info) {
@@ -194,6 +194,7 @@
       </span></label>
     <label class="set-row check" id="setAutoCheckinRow"><span>Auto check-in at stops <small>(Work: GPS proximity)</small></span><input id="setAutoCheckin" type="checkbox"></label>
     <label class="set-row check" id="setAutoConfirmRow"><span>Auto-confirm all stops <small>(Work: uses screenshot times)</small></span><input id="setAutoConfirm" type="checkbox"></label>
+    <label class="set-row check"><span>Suggest early-arrival shortcuts <small>(saves drive time)</small></span><input id="setEarlySuggest" type="checkbox"></label>
     <label class="set-row check"><span>Avoid tolls</span><input id="setTolls" type="checkbox"></label>
     <label class="set-row check"><span>Avoid highways</span><input id="setHwy" type="checkbox"></label>
     <label class="set-row check"><span>Return to start at end</span><input id="setReturn" type="checkbox"></label>
@@ -248,6 +249,18 @@
     <div class="btn-row">
       <button id="reoptYes" class="btn primary">Yes</button>
       <button id="reoptNo" class="btn secondary">Keep as is</button>
+    </div>
+  </div>
+</div>
+
+<!-- Early-arrival suggestion -->
+<div id="earlySheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>💡 Early arrival could save time</h2></div>
+    <p class="fine" id="earlyText"></p>
+    <div class="btn-row">
+      <button id="earlyYes" class="btn primary">Apply</button>
+      <button id="earlyNo" class="btn secondary">Dismiss</button>
     </div>
   </div>
 </div>
@@ -317,8 +330,8 @@
   })();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-<script src="core.js?v=20261002-180138"></script>
-<script src="ocr.js?v=20261002-180138"></script>
-<script src="app.js?v=20261002-180138"></script>
+<script src="core.js?v=20261002-195403"></script>
+<script src="ocr.js?v=20261002-195403"></script>
+<script src="app.js?v=20261002-195403"></script>
 </body>
 </html>

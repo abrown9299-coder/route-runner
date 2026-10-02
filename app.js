@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-180138';
+  const RR_BUILD = '20261002-195403';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -30,6 +30,7 @@
     defaultStart: '', defaultEnd: '', avoidTolls: false, avoidHwy: false,
     returnToStart: false, saveHistory: false, autoCheckin: false, autoConfirmAll: false, mode: 'work', // 'work' | 'personal'
     serviceTimes: { default: 45, byJobType: {}, known: [] },
+    earlySuggest: true, // suggest early-arrival swaps that save drive time
   };
   const isWorkMode = () => settings.mode !== 'personal';
 
@@ -1175,6 +1176,30 @@
         state.matrixSource = source;
         state.returnActive = !!returnPt;
         state.endActive = !!endPt;
+        // Early-arrival suggestion: check if swapping a consecutive pair to
+        // arrive early (<=30 min) at the next stop would save 10+ min driving.
+        // The user decides — never auto-applies.
+        state.earlyOpportunity = null;
+        if (settings.earlySuggest !== false && schedule && windows.some(Boolean)) {
+          try {
+            const simCtx = { windows, departMin, serviceMin, bufferMin: 30 };
+            const opp = RouteCore.findEarlyArrivalOpportunity(order, durMin, simCtx);
+            if (opp) {
+              const earlyPt = points[opp.earlyStop];
+              const earlyStop = earlyPt && earlyPt._stopId ? byStopId[earlyPt._stopId] : null;
+              const otherPt = points[order[opp.swapIdx]];
+              const otherStop = otherPt && otherPt._stopId ? byStopId[otherPt._stopId] : null;
+              if (earlyStop && otherStop) {
+                state.earlyOpportunity = {
+                  earlyStop, otherStop,
+                  earlyByMin: opp.earlyByMin,
+                  savedMin: opp.savedMin,
+                  newOrder: opp.newOrder,
+                };
+              }
+            }
+          } catch (e) { console.warn('early-arrival check failed', e); }
+        }
       // remember per-stop projected arrivals (popup defaults, at-risk checks)
       let risks = [];
       if (schedule) {
@@ -1258,6 +1283,10 @@
         return;
       }
       applyOptimization();
+      // Show early-arrival suggestion if one was found.
+      if (state.earlyOpportunity && !auto) {
+        showEarlySuggestion(state.earlyOpportunity);
+      }
     } catch (e) {
       console.warn(e);
       if (!auto) toast('Optimization hit a snag — try again');
@@ -1282,6 +1311,49 @@
     pendingReopt = null;
     lastOptAt = Date.now(); // treated as handled for the anti-spam gate
     toast('Keeping your current order');
+  };
+
+  /* Early-arrival suggestion: show the tradeoff, let the user decide. */
+  let pendingEarly = null;
+  function showEarlySuggestion(opp) {
+    pendingEarly = opp;
+    const fmtTime = (mins) => {
+      const h = Math.floor(mins / 60), m = Math.round(mins % 60);
+      const ap = h >= 12 ? 'PM' : 'AM';
+      const hh = h % 12 || 12;
+      return hh + ':' + String(m).padStart(2, '0') + ' ' + ap;
+    };
+    const earlyAddr = stopLabel(opp.earlyStop);
+    const otherAddr = stopLabel(opp.otherStop);
+    const winEnd = opp.otherStop.twEnd != null ? fmtTime(opp.otherStop.twEnd) : '';
+    $('earlyText').textContent =
+      'Head to ' + earlyAddr + ' first — arrive ~' + opp.earlyByMin +
+      ' min early, save ~' + opp.savedMin + ' min of driving. ' +
+      'You\'d still make ' + otherAddr + (winEnd ? ' by ' + winEnd : '') + '.';
+    $('earlySheet').hidden = false;
+  }
+  $('earlyYes').onclick = () => {
+    $('earlySheet').hidden = true;
+    const opp = pendingEarly; pendingEarly = null;
+    if (!opp) return;
+    try {
+      // Swap the two stops' positions in state.stops.
+      const iA = state.stops.findIndex((s) => s.id === opp.otherStop.id);
+      const iB = state.stops.findIndex((s) => s.id === opp.earlyStop.id);
+      if (iA >= 0 && iB >= 0) {
+        const tmp = state.stops[iA];
+        state.stops[iA] = state.stops[iB];
+        state.stops[iB] = tmp;
+        state.earlyOpportunity = null;
+        save(); render(); refreshMap();
+        toast('⚡ Route updated — ~' + opp.savedMin + ' min saved');
+      }
+    } catch (e) { console.warn('early-apply failed', e); }
+  };
+  $('earlyNo').onclick = () => {
+    $('earlySheet').hidden = true;
+    pendingEarly = null;
+    state.earlyOpportunity = null;
   };
 
   /* ---------- automatic re-optimization engine (v1.9) ----------
@@ -1850,6 +1922,7 @@
     $('setHistory').checked = settings.saveHistory;
     $('setAutoCheckin').checked = !!settings.autoCheckin;
     $('setAutoConfirm').checked = !!settings.autoConfirmAll;
+    $('setEarlySuggest').checked = settings.earlySuggest !== false;
     $('setMode').value = settings.mode || 'work';
     updateModeHint();
     renderServiceTimes();
@@ -2022,6 +2095,7 @@
     settings.autoCheckin = $('setAutoCheckin').checked;
     const acfBefore = !!settings.autoConfirmAll;
     settings.autoConfirmAll = $('setAutoConfirm').checked;
+    settings.earlySuggest = $('setEarlySuggest').checked;
     if (settings.returnToStart !== retBefore) {
       // the route shape changed (return leg added/removed) — re-optimize needed
       state.optimized = false; state.returnActive = false; state.endActive = false;
@@ -2136,7 +2210,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-180138' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-195403' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
