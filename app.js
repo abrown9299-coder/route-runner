@@ -107,12 +107,16 @@
    * standalone; here we fill in the platform-specific steps. There is no
    * dismiss — the gate stays until the app is opened from the home screen. */
   (function installGateSteps() {
-    let standalone = false;
+    let standalone = false, isMobile = false;
     try {
       standalone = window.matchMedia('(display-mode: standalone)').matches ||
                    window.navigator.standalone === true;
+      const ua = String(navigator.userAgent || '');
+      isMobile = /iPad|iPhone|iPod|Android/i.test(ua) ||
+                 (navigator.maxTouchPoints > 1 && /Mac/i.test(ua));
     } catch (e) {}
-    if (standalone) return;
+    // desktop browsers are exempt — the gate is for phones only
+    if (standalone || !isMobile) return;
     const ua = String(navigator.userAgent || '');
     const isIOS = /iPad|iPhone|iPod/.test(ua);
     const isAndroid = /Android/.test(ua);

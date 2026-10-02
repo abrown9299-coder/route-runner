@@ -6,7 +6,7 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261002-002331">
+<meta name="app-version" content="20261002-002708">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -28,12 +28,16 @@
 </div>
 <script>
 (function () {
-  var standalone = false;
+  var standalone = false, isMobile = false;
   try {
     standalone = window.matchMedia('(display-mode: standalone)').matches ||
                  window.navigator.standalone === true;
+    var ua = String(window.navigator.userAgent || '');
+    isMobile = /iPad|iPhone|iPod|Android/i.test(ua) ||
+               (window.navigator.maxTouchPoints > 1 && /Mac/i.test(ua));
   } catch (e) {}
-  if (!standalone) {
+  // desktop browsers are exempt — the gate is for phones only
+  if (!standalone && isMobile) {
     var g = document.getElementById('installGate');
     if (g) g.hidden = false;
   }
