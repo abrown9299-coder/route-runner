@@ -1701,6 +1701,51 @@
       } catch (e) { toast('Address lookup failed'); }
     }, () => toast('Location unavailable'), { timeout: 10000 });
   };
+
+  /* Address autofill for the default start/end fields (Photon, same as stop search). */
+  function wireSettingsAutocomplete(inputId, listId, wrapId) {
+    let timer = null;
+    $(inputId).addEventListener('input', (e) => {
+      clearTimeout(timer);
+      const q = e.target.value.trim();
+      if (q.length < 4) { $(listId).hidden = true; return; }
+      timer = setTimeout(async () => {
+        try {
+          const url = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
+            '&limit=6&lat=36.1627&lon=-86.7816';
+          const r = await fetch(url);
+          const j = await r.json();
+          const list = $(listId);
+          list.innerHTML = '';
+          (j.features || []).forEach((f) => {
+            const p = f.properties || {};
+            const label = [p.name, p.street, p.city, p.state, p.postcode].filter(Boolean)
+              .filter((v, i, a) => a.indexOf(v) === i).join(', ');
+            const li = document.createElement('li');
+            li.innerHTML = esc(label || 'Unnamed place') +
+              '<small>' + esc([p.city, p.state].filter(Boolean).join(', ')) + '</small>';
+            li.onclick = () => {
+              // Build a clean "street, city, ST zip" address for the field.
+              const street = [p.name, p.street].filter(Boolean).join(' ') ||
+                             [p.housenumber, p.street].filter(Boolean).join(' ');
+              const addr = [street, p.city,
+                            [p.state, p.postcode].filter(Boolean).join(' ')]
+                .filter(Boolean).join(', ');
+              $(inputId).value = addr || label;
+              list.hidden = true;
+            };
+            list.appendChild(li);
+          });
+          list.hidden = !(j.features || []).length;
+        } catch (e) { /* offline — suggestions unavailable */ }
+      }, 350);
+    });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#' + wrapId)) $(listId).hidden = true;
+    });
+  }
+  wireSettingsAutocomplete('setStart', 'setStartSuggest', 'setStartWrap');
+  wireSettingsAutocomplete('setEnd', 'setEndSuggest', 'setEndWrap');
   $('setEndGps').onclick = () => {
     // Capture current GPS position and reverse-geocode it into the end field,
     // so "default end" becomes home (or wherever you're headed after work).
