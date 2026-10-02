@@ -652,7 +652,10 @@
           parsed.forEach((p) => all.push({
             id: uid(), street: p.street, city: p.city, state: p.state, zip: p.zip,
             jobType: p.jobType || '', note: '', lat: null, lng: null, geocodeSource: null,
-            done: false, isLast: false, isFirst: false, confirmed: false, twStart: null, twEnd: null, apptMin: (p.apptMin != null ? p.apptMin : null), source: 'ocr',
+            done: false, isLast: false, isFirst: false,
+            confirmed: p.twEnd != null && p.apptMin != null,
+            twStart: p.apptMin, twEnd: p.twEnd,
+            apptMin: (p.apptMin != null ? p.apptMin : null), source: 'ocr',
           }));
         } catch (err) { console.warn('OCR failed for one image', err); }
       }

@@ -40,6 +40,45 @@
 var CITY_ZIP_RE = /^(.+?),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?$/;
 var STREET_RE = /^\d+\s+[A-Za-z]/;
 
+/* Known pest-control job types for detection in schedule text.
+ * These are service labels, not addresses — matched to populate jobType. */
+var KNOWN_JOB_TYPES = [
+  'General Pest Control', 'General Pest', 'Pest Control',
+  'Termite Protection', 'Termite', 'Sentricon', 'Termidor', 'Trelona',
+  'Mosquito Control', 'Mosquito', 'Bed Bug Treatment', 'Bed Bug', 'Bed Bugs',
+  'Rodent Control', 'Rodent', 'Wasp', 'Stinging Insect', 'Fleas', 'Ticks',
+  'Quarterly', 'Bi-monthly', 'Bimonthly', 'Monthly', 'Annual',
+  'Initial Service', 'Initial', 'Re-treatment', 'Retreatment', 'Callback',
+  'Inspection', 'Warranty Service', 'Exterior', 'Interior', 'Perimeter',
+];
+
+/* Labeled address field patterns: "Service Address: ...", "Address: ..." */
+var LABEL_RE = /^(?:Service\s+Address|Property\s+Address|Site\s+Address|Location|Address)\s*:\s*(.+)$/i;
+
+/* Time window: "9:00 AM - 11:00 AM" or "9:00-11:00 AM" — extract the start */
+function parseTimeWindow(s) {
+  var m = String(s).match(/(\d{1,2}:\d{2}\s*[APap]\.?\s*[Mm]\.?)\s*[-\u2013\u2014]\s*(\d{1,2}:\d{2}\s*[APap]\.?\s*[Mm]\.?)/);
+  if (m) {
+    var start = parseClockToMin(m[1]);
+    var end = parseClockToMin(m[2]);
+    if (start !== null && end !== null) return { start: start, end: end };
+  }
+  // "between 10 and 12" or "10am-12pm"
+  m = String(s).match(/between\s+(\d{1,2})\s*(am|pm)?\s+and\s+(\d{1,2})\s*(am|pm)/i);
+  if (m) {
+    var s1 = parseClockToMin(m[1] + ':00 ' + (m[2] || m[4] || 'AM'));
+    var e1 = parseClockToMin(m[3] + ':00 ' + (m[4] || 'PM'));
+    if (s1 !== null && e1 !== null) return { start: s1, end: e1 };
+  }
+  return null;
+}
+
+/* Stop number: "3.", "3)", "Stop 3", "3 of 14" — returns the number or null */
+function parseStopNumber(s) {
+  var m = String(s).match(/^(?:Stop\s+)?(\d{1,2})(?:\s*[.)]|\s+of\s+\d+)/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
 /* Freeform address extractor for screenshots of notes, GPS apps, etc.
  * Finds street addresses anywhere in the text, not just schedule format.
  * Returns [{street, city, state, zip}] — no job types, times, or names. */
@@ -122,24 +161,68 @@ function parseOcrText(text) {
     .filter(function (l) { return l.length > 0; });
 
   var out = [];
+  var seen = {}; // dedupe by street+zip across formats
+
+  function pushStop(street, city, state, zip, jobType, apptMin, twEnd) {
+    var key = (street + '|' + zip).toLowerCase();
+    if (seen[key]) return;
+    seen[key] = true;
+    out.push({
+      street: street, city: city, state: state, zip: zip,
+      jobType: jobType || '', apptMin: apptMin != null ? apptMin : null,
+      twEnd: twEnd != null ? twEnd : null,
+    });
+  }
+
+  function matchKnownJobType(s) {
+    var low = String(s).toLowerCase();
+    for (var i = 0; i < KNOWN_JOB_TYPES.length; i++) {
+      if (low.indexOf(KNOWN_JOB_TYPES[i].toLowerCase()) !== -1) return KNOWN_JOB_TYPES[i];
+    }
+    return '';
+  }
+
+  /* Pass 1: labeled fields — "Service Address: 123 Main St, Nashville, TN 37201" */
+  for (var li = 0; li < lines.length; li++) {
+    var lm = lines[li].match(LABEL_RE);
+    if (!lm) continue;
+    var addr = lm[1].trim();
+    // try single-line first
+    var fm = addr.match(/^(\d+\s+[A-Za-z0-9\s.'-]+?),\s*(.+?),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?$/);
+    if (fm) {
+      pushStop(fm[1].trim(), fm[2].trim(), fm[3], fm[4], '', null, null);
+      continue;
+    }
+    // two-line: label on one line, city on the next
+    if (STREET_RE.test(addr) && li + 1 < lines.length) {
+      var cm = lines[li + 1].match(CITY_ZIP_RE);
+      if (cm) pushStop(addr, cm[1].trim(), cm[2], cm[3], '', null, null);
+    }
+  }
+
   var prevCity = -1; /* index of the previous stop's city line: block boundary */
   for (var i = 0; i < lines.length; i++) {
     var m = lines[i].match(CITY_ZIP_RE);
     if (!m) continue;
 
-    /* street = nearest PRECEDING line that starts with a house number */
+    /* street = nearest PRECEDING line that starts with a house number.
+     * Strip a leading stop number ("3. 123 Main St" -> "123 Main St"). */
     var street = '';
     for (var k = i - 1; k >= 0; k--) {
-      if (STREET_RE.test(lines[k])) { street = lines[k]; break; }
+      var cand = lines[k].replace(/^(?:Stop\s+)?\d{1,2}[.)]\s+/, '');
+      if (STREET_RE.test(cand)) { street = cand; break; }
       if (CITY_ZIP_RE.test(lines[k])) break; /* previous stop's block */
     }
     if (!street) continue; /* city line without a street is not a stop */
 
-    /* apptMin = nearest preceding time line inside this stop's block
-     * (name -> time -> street -> city). The name itself is never stored. */
-    var apptMin = null;
+    /* apptMin = nearest preceding time line inside this stop's block.
+     * Handles exact times AND windows ("9:00 AM - 11:00 AM" -> start=540, end=660).
+     * The name itself is never stored. */
+    var apptMin = null, twEnd = null;
     for (var t = k - 1; t > prevCity; t--) {
       if (CITY_ZIP_RE.test(lines[t])) break;
+      var win = parseTimeWindow(lines[t]);
+      if (win) { apptMin = win.start; twEnd = win.end; break; }
       if (TIME_RE.test(lines[t])) {
         var tm = lines[t].match(/^\d{1,2}:\d{2}(?:\s*[APap]\.?\s*[Mm]\.?)?/);
         var pv = tm ? parseClockToMin(tm[0]) : null;
@@ -147,10 +230,9 @@ function parseOcrText(text) {
       }
     }
 
-    /* jobType = first FOLLOWING line that is not a time and < 60 chars.
-     * Stop at the next stop's block (street/city line). If the candidate is
-     * immediately followed by a time line it is the NEXT stop's name
-     * (name -> time pattern) -> treat as missing jobType so no name leaks. */
+    /* jobType: first try the following-line heuristic (finds specific text like
+     * "Sentricon Guarantee/Coverage"), then fall back to known-type scanning.
+     * Stop at the next stop's block. Never leak names. */
     var jobType = '';
     for (var j = i + 1; j < lines.length; j++) {
       var ln = lines[j];
@@ -162,15 +244,12 @@ function parseOcrText(text) {
       jobType = ln;
       break;
     }
+    // if heuristic found nothing, scan nearby text for known job types
+    if (!jobType) {
+      jobType = matchKnownJobType(lines.slice(Math.max(0, k - 2), i + 2).join(' '));
+    }
 
-    out.push({
-      street: street,
-      city: m[1].trim(),
-      state: m[2],
-      zip: m[3],
-      jobType: jobType,
-      apptMin: apptMin
-    });
+    pushStop(street, m[1].trim(), m[2], m[3], jobType, apptMin, twEnd);
     prevCity = i;
   }
   return out;
