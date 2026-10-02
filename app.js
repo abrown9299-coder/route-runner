@@ -666,38 +666,44 @@
       });
       // "Use what I typed" — Photon often lacks house numbers; the Census
       // geocoder is authoritative for US addresses and free with no key.
-      if (q.match(/^\d+\s+\S/)) {
-        const li = document.createElement('li');
-        li.innerHTML = '➕ <b>Use "' + esc(q) + '"</b><small>Look up this exact address</small>';
-        li.onclick = async () => {
-          toast('Looking up address…');
-          try {
-            const url = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
-              '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json';
-            const r = await fetch(url);
-            const j = await r.json();
-            const m = j.result && j.result.addressMatches && j.result.addressMatches[0];
-            if (!m) { toast('Could not find that address'); return; }
-            const a = m.addressComponents || {};
-            addStops([{
-              id: uid(),
-              street: ((a.number || '') + ' ' + (a.street || '')).trim() || q,
-              city: a.city || 'Nashville',
-              state: 'TN', zip: a.zip || '',
-              jobType: '', note: '',
-              lat: m.coordinates.y, lng: m.coordinates.x,
-              geocodeSource: 'census-manual',
-              done: false, isLast: false, isFirst: false,
-              confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
-            }]);
-            $('searchInput').value = '';
-            list.hidden = true;
-            toast('✓ Stop added');
-          } catch (e) { toast('Lookup failed — are you online?'); }
-        };
-        list.appendChild(li);
+      // When the query starts with a house number, try Census FIRST and put
+      // the exact match at the top.
+      const hasHouseNum = /^\d+\s+\S/.test(q);
+      if (hasHouseNum) {
+        try {
+          const cUrl = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
+            '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json';
+          const cr = await fetch(cUrl);
+          const cj = await cr.json();
+          const cm = cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
+          if (cm) {
+            const a = cm.addressComponents || {};
+            const street = [(a.fromAddress || a.number || ''),
+                            (a.streetName || a.street || ''),
+                            (a.suffixType || '')].filter(Boolean).join(' ');
+            const li = document.createElement('li');
+            li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
+            li.onclick = () => {
+              addStops([{
+                id: uid(),
+                street: street || q,
+                city: (a.city || 'Nashville'),
+                state: 'TN', zip: a.zip || '',
+                jobType: '', note: '',
+                lat: cm.coordinates.y, lng: cm.coordinates.x,
+                geocodeSource: 'census-manual',
+                done: false, isLast: false, isFirst: false,
+                confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
+              }]);
+              $('searchInput').value = '';
+              list.hidden = true;
+              toast('✓ Stop added');
+            };
+            list.insertBefore(li, list.firstChild);
+          }
+        } catch (e) { /* Census failed — fall through to Photon */ }
       }
-      list.hidden = !(j.features || []).length && !q.match(/^\d+\s+\S/);
+      list.hidden = !(j.features || []).length && !list.children.length;
     } catch (e) { /* offline — suggestions unavailable */ }
   }
   document.addEventListener('click', (e) => {
@@ -1453,31 +1459,31 @@
         };
         list.appendChild(li);
       });
-      if (q.match(/^\d+\s+\S/)) {
-        const li = document.createElement('li');
-        li.innerHTML = '➕ <b>Use "' + esc(q) + '"</b><small>Look up this exact address</small>';
-        li.onclick = async () => {
-          toast('Looking up address…');
-          try {
-            const url = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
-              '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json';
-            const r = await fetch(url);
-            const j = await r.json();
-            const m = j.result && j.result.addressMatches && j.result.addressMatches[0];
-            if (!m) { toast('Could not find that address'); return; }
-            state.origin = {
-              type: 'address',
-              label: m.matchedAddress.split(',').slice(0, 2).join(','),
-              lat: m.coordinates.y, lng: m.coordinates.x,
+      if (/^\d+\s+\S/.test(q)) {
+        try {
+          const cUrl = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
+            '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json';
+          const cr = await fetch(cUrl);
+          const cj = await cr.json();
+          const cm = cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
+          if (cm) {
+            const li = document.createElement('li');
+            li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
+            li.onclick = () => {
+              state.origin = {
+                type: 'address',
+                label: cm.matchedAddress.split(',').slice(0, 2).join(','),
+                lat: cm.coordinates.y, lng: cm.coordinates.x,
+              };
+              $('originSheet').hidden = true;
+              markDirty('Start updated');
+              toast('✓ Start updated');
             };
-            $('originSheet').hidden = true;
-            markDirty('Start updated');
-            toast('✓ Start updated');
-          } catch (e) { toast('Lookup failed — are you online?'); }
-        };
-        list.appendChild(li);
+            list.insertBefore(li, list.firstChild);
+          }
+        } catch (e) { /* Census failed — fall through to Photon */ }
       }
-      list.hidden = !(j.features || []).length && !q.match(/^\d+\s+\S/);
+      list.hidden = !(j.features || []).length && !list.children.length;
     } catch (e) { /* offline — suggestions unavailable */ }
   }
   document.addEventListener('click', (e) => {
@@ -1719,7 +1725,7 @@
     }, () => toast('Location unavailable'), { timeout: 10000 });
   };
 
-  /* Address autofill for the default start/end fields (Photon, same as stop search). */
+  /* Address autofill for the default start/end fields (Photon + Census exact match). */
   function wireSettingsAutocomplete(inputId, listId, wrapId) {
     let timer = null;
     $(inputId).addEventListener('input', (e) => {
@@ -1742,7 +1748,6 @@
             li.innerHTML = esc(label || 'Unnamed place') +
               '<small>' + esc([p.city, p.state].filter(Boolean).join(', ')) + '</small>';
             li.onclick = () => {
-              // Build a clean "street, city, ST zip" address for the field.
               const street = [p.name, p.street].filter(Boolean).join(' ') ||
                              [p.housenumber, p.street].filter(Boolean).join(' ');
               const addr = [street, p.city,
@@ -1753,7 +1758,26 @@
             };
             list.appendChild(li);
           });
-          list.hidden = !(j.features || []).length;
+          // Census exact match first when the query has a house number.
+          if (/^\d+\s+\S/.test(q)) {
+            try {
+              const cUrl = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress' +
+                '?address=' + encodeURIComponent(q + ', Nashville, TN') + '&benchmark=2020&format=json';
+              const cr = await fetch(cUrl);
+              const cj = await cr.json();
+              const cm = cj.result && cj.result.addressMatches && cj.result.addressMatches[0];
+              if (cm) {
+                const li = document.createElement('li');
+                li.innerHTML = '✓ <b>' + esc(cm.matchedAddress) + '</b><small>Exact address match</small>';
+                li.onclick = () => {
+                  $(inputId).value = cm.matchedAddress;
+                  list.hidden = true;
+                };
+                list.insertBefore(li, list.firstChild);
+              }
+            } catch (e) { /* Census failed — Photon results stand */ }
+          }
+          list.hidden = !list.children.length;
         } catch (e) { /* offline — suggestions unavailable */ }
       }, 350);
     });
