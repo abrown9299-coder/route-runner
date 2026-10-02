@@ -6,7 +6,7 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261002-004905">
+<meta name="app-version" content="20261002-005054">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -107,7 +107,7 @@
   <!-- Stop list -->
   <section id="listCard" class="card">
     <div class="list-head">
-      <h2>Stops <span id="stopCount"></span></h2>
+      <h2><span id="listTitle">Stops</span> <span id="stopCount"></span></h2>
       <button id="mapToggle" class="btn ghost">🗺 Map</button>
       <button id="clearAllBtn" class="btn ghost" style="display:none">🗑 Clear</button>
     </div>
@@ -129,6 +129,18 @@
     <h3>Reading screenshots…</h3>
     <div class="ocr-bar"><div id="ocrBarFill"></div></div>
     <p id="ocrStatus"></p>
+  </div>
+</div>
+
+<!-- Origin search sheet -->
+<div id="originSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>📍 Start location</h2><button id="originClose" class="icon-btn">✕</button></div>
+    <div id="originSearchWrap" style="position:relative">
+      <input id="originSearchInput" placeholder="Search address..." autocomplete="off">
+      <ul id="originSuggestList" hidden></ul>
+    </div>
+    <button id="originUseGps" class="btn" style="width:100%;margin-top:12px">📡 Use current location</button>
   </div>
 </div>
 

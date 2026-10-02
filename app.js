@@ -256,11 +256,17 @@
     $('progressRing').style.strokeDashoffset = total
       ? 113 - (113 * done / total) : 113;
     $('stopCount').textContent = total ? '(' + total + ')' : '';
+    $('listTitle').textContent = isWorkMode() ? 'Appointments' : 'Stops';
     $('clearAllBtn').style.display = total ? '' : 'none';
 
     const ul = $('stopList');
     ul.innerHTML = '';
     $('emptyHint').style.display = total ? 'none' : 'block';
+    if (!total) {
+      $('emptyHint').textContent = isWorkMode()
+        ? 'No appointments yet — add screenshots of your schedule or search an address above.'
+        : 'No stops yet — search an address above to add one.';
+    }
     state.stops.forEach((s, i) => {
       const li = document.createElement('li');
       li.className = 'stop' + (s.done ? ' done' : '') + (s.isLast ? ' is-last' : '') + (s.isFirst ? ' is-first' : '');
@@ -1197,17 +1203,54 @@
 
   /* ---------- origin ---------- */
   $('originBtn').onclick = async () => {
-    const cur = state.origin.type === 'address' ? state.origin.label : '';
-    const v = prompt('Start address (blank = use current GPS location):', cur);
-    if (v === null) return;
-    const t = v.trim();
-    if (!t) {
-      state.origin = { type: 'gps', label: 'Current location', lat: null, lng: null };
-    } else {
-      state.origin = { type: 'address', label: t, lat: null, lng: null };
-    }
-    markDirty('Start updated');
+    $('originSearchInput').value = state.origin.type === 'address' ? (state.origin.label || '') : '';
+    $('originSuggestList').innerHTML = '';
+    $('originSuggestList').hidden = true;
+    $('originSheet').hidden = false;
+    setTimeout(() => $('originSearchInput').focus(), 50);
   };
+  $('originClose').onclick = () => { $('originSheet').hidden = true; };
+  $('originUseGps').onclick = () => {
+    state.origin = { type: 'gps', label: 'Current location', lat: null, lng: null };
+    $('originSheet').hidden = true;
+    markDirty('Start updated — using GPS');
+  };
+  let originSearchTimer = null;
+  $('originSearchInput').addEventListener('input', (e) => {
+    clearTimeout(originSearchTimer);
+    const q = e.target.value.trim();
+    if (q.length < 4) { $('originSuggestList').hidden = true; return; }
+    originSearchTimer = setTimeout(() => searchOriginPhoton(q), 350);
+  });
+  async function searchOriginPhoton(q) {
+    try {
+      const url = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
+        '&limit=6&lat=36.1627&lon=-86.7816';
+      const r = await fetch(url);
+      const j = await r.json();
+      const list = $('originSuggestList');
+      list.innerHTML = '';
+      (j.features || []).forEach((f) => {
+        const p = f.properties || {};
+        const label = [p.name, p.street, p.city, p.state, p.postcode].filter(Boolean)
+          .filter((v, i, a) => a.indexOf(v) === i).join(', ');
+        const li = document.createElement('li');
+        li.innerHTML = esc(label || 'Unnamed place') +
+          '<small>' + esc([p.city, p.state].filter(Boolean).join(', ')) + '</small>';
+        li.onclick = () => {
+          const [lng, lat] = f.geometry.coordinates;
+          state.origin = { type: 'address', label: label, lat, lng };
+          $('originSheet').hidden = true;
+          markDirty('Start updated');
+        };
+        list.appendChild(li);
+      });
+      list.hidden = !(j.features || []).length;
+    } catch (e) { /* offline — suggestions unavailable */ }
+  }
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#originSearchWrap')) $('originSuggestList').hidden = true;
+  });
 
   /* ---------- map ---------- */
   let mapObj = null, leafletLoading = null;
