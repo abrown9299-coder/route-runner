@@ -312,7 +312,9 @@ function parseOcrText(text) {
     }
     // Lock detection: scan the whole block (time line, street, nearby lines)
     // for 🔒. A lock means confirmed appointment, regardless of settings.
-    var locked = false;
+    // A time WINDOW also means confirmed — unconfirmed stops have odd ETA
+    // times, not windows.
+    var locked = twEnd != null;
     var blockStart = Math.max(0, (timeLineIdx >= 0 ? timeLineIdx : streetLineIdx) - 2);
     for (var bl = blockStart; bl <= i && bl < lines.length; bl++) {
       if (hasLockIndicator(lines[bl])) { locked = true; break; }
