@@ -916,7 +916,7 @@ function buildMapsLinks(originLabel, orderedStops, opts) {
 
     var dest = stopLabel(stops[destIdx]);
     var url = 'https://www.google.com/maps/dir/?api=1' +
-      '&origin=' + encodeURIComponent(origin) +
+      (origin ? '&origin=' + encodeURIComponent(origin) : '') +
       '&destination=' + encodeURIComponent(dest) +
       (wps.length
         ? '&waypoints=' + wps.map(function (s) { return encodeURIComponent(stopLabel(s)); }).join('|')

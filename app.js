@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-111637';
+  const RR_BUILD = '20261002-134708';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
 
@@ -1344,6 +1344,9 @@
 
   /* ---------- Google Maps ---------- */
   function originLabel() {
+    // If origin is GPS/current location, return empty so Google Maps uses
+    // the device's live location (raw coordinates become "Dropped pin").
+    if (state.origin.type === 'gps') return '';
     if (state.origin.lat != null) return state.origin.lat.toFixed(5) + ',' + state.origin.lng.toFixed(5);
     return state.origin.label || 'Current location';
   }
@@ -2093,7 +2096,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-111637' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-134708' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
