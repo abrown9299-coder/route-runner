@@ -217,17 +217,18 @@ function parseOcrText(text) {
 
     /* apptMin = nearest preceding time line inside this stop's block.
      * Handles exact times AND windows ("9:00 AM - 11:00 AM" -> start=540, end=660).
+     * Times can be anywhere in the line ("Sean Shelby  9:00 AM").
      * The name itself is never stored. */
     var apptMin = null, twEnd = null;
     for (var t = k - 1; t > prevCity; t--) {
       if (CITY_ZIP_RE.test(lines[t])) break;
       var win = parseTimeWindow(lines[t]);
       if (win) { apptMin = win.start; twEnd = win.end; break; }
-      if (TIME_RE.test(lines[t])) {
-        var tm = lines[t].match(/^\d{1,2}:\d{2}(?:\s*[APap]\.?\s*[Mm]\.?)?/);
-        var pv = tm ? parseClockToMin(tm[0]) : null;
-        if (pv !== null) { apptMin = pv; break; }
-      }
+      // Find a clock time anywhere in the line, not just at the start.
+      var tm = lines[t].match(/\b(\d{1,2}:\d{2}\s*[APap]\.?\s*[Mm]\.?)\b/);
+      if (!tm) tm = lines[t].match(/\b(\d{1,2}:\d{2})\b/);
+      var pv = tm ? parseClockToMin(tm[1]) : null;
+      if (pv !== null) { apptMin = pv; break; }
     }
 
     /* jobType: first try the following-line heuristic (finds specific text like
