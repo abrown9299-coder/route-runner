@@ -6,13 +6,13 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261002-201857">
+<meta name="app-version" content="20261002-202750">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" type="image/png" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20261002-201857">
+<link rel="stylesheet" href="styles.css?v=20261002-202750">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <script>
 /* Stale-code gate: runs before anything else. If this HTML is stale
@@ -24,7 +24,7 @@
     var local = stamped ? stamped.getAttribute('content') : '';
     // Skip if this is already a cache-busted reload (avoid loops).
     if (/[?&]v=/.test(location.search)) return;
-    if (!local || local.indexOf('20261002-201857') !== -1) return; // dev, unstamped
+    if (!local || local.indexOf('20261002-202750') !== -1) return; // dev, unstamped
     fetch('version.json', { cache: 'no-store' }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (info) {
@@ -199,6 +199,16 @@
     <label class="set-row check"><span>Avoid highways</span><input id="setHwy" type="checkbox"></label>
     <label class="set-row check"><span>Return to start at end</span><input id="setReturn" type="checkbox"></label>
     <label class="set-row check"><span>Save route history</span><input id="setHistory" type="checkbox"></label>
+    <div class="set-sec">
+      <h3>Traffic learning</h3>
+      <p class="fine">Anonymized: coarse area (~7 mi) × 3-hour buckets only. No addresses, no precise locations.</p>
+      <div class="btn-row">
+        <button id="trafficExport" class="btn secondary">Export anonymous data</button>
+        <button id="trafficImport" class="btn secondary">Import traffic model</button>
+      </div>
+      <input id="trafficFile" type="file" accept=".json" hidden>
+      <p class="fine" id="trafficStatus"></p>
+    </div>
     <div class="set-sec" id="svcSec">
       <h3>Service times</h3>
       <label class="set-row"><span>Default service time</span><select id="setSvcDefault"></select></label>
@@ -330,8 +340,8 @@
   })();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-<script src="core.js?v=20261002-201857"></script>
-<script src="ocr.js?v=20261002-201857"></script>
-<script src="app.js?v=20261002-201857"></script>
+<script src="core.js?v=20261002-202750"></script>
+<script src="ocr.js?v=20261002-202750"></script>
+<script src="app.js?v=20261002-202750"></script>
 </body>
 </html>

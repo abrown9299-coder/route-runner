@@ -3,7 +3,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-201857';
+  const RR_BUILD = '20261002-202750';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
   const LS_TRAFFIC = 'rr.traffic.learn.v1';
@@ -970,13 +970,28 @@
     try { localStorage.setItem(LS_TRAFFIC, JSON.stringify(d)); } catch (e) {}
   }
   /* Effective traffic factor closure for the optimizer: base pattern blended
-   * with learned data for this area + time. */
+   * with learned data (local + imported model) for this area + time. */
   function makeTrafficFn() {
-    const learn = loadTrafficLearn();
+    const local = loadTrafficLearn();
+    const imported = loadTrafficModel();
+    // Merge imported model into a combined learn structure.
+    // Imported buckets are treated as additional samples.
+    const combined = { buckets: { ...(local.buckets || {}) } };
+    if (imported && imported.buckets) {
+      for (const k in imported.buckets) {
+        const ib = imported.buckets[k];
+        if (!ib || !ib.n || !ib.ratio) continue;
+        const cb = combined.buckets[k] || { n: 0, sum: 0 };
+        // Imported ratio -> convert back to sum: ratio * n
+        cb.n += ib.n;
+        cb.sum += ib.ratio * ib.n;
+        combined.buckets[k] = cb;
+      }
+    }
     const now = new Date();
     const isWeekend = now.getDay() === 0 || now.getDay() === 6;
     return (departMin, lat, lng) => {
-      return RouteCore.learnedTrafficFactorAt(departMin, isWeekend, learn, lat, lng);
+      return RouteCore.learnedTrafficFactorAt(departMin, isWeekend, combined, lat, lng);
     };
   }
   function startLegTracking(toStop, freeFlowMin) {
@@ -1547,6 +1562,59 @@
     } catch (e) {}
   }
 
+  /* ---------- traffic data export/import (anonymized) ---------- */
+  const LS_TRAFFIC_MODEL = 'rr.traffic.model.v1'; // imported aggregated model
+  function exportTrafficData() {
+    try {
+      const learn = loadTrafficLearn();
+      const buckets = learn.buckets || {};
+      const keys = Object.keys(buckets);
+      if (!keys.length) {
+        $('trafficStatus').textContent = 'No traffic data yet — drive some routes first.';
+        return;
+      }
+      // Export is already anonymized: coarse bucket keys + aggregated ratios.
+      // No addresses, no precise coordinates, no timestamps.
+      const out = {
+        exported_at: new Date().toISOString().slice(0, 10), // date only, no time
+        buckets: buckets,
+      };
+      const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'traffic-samples-' + out.exported_at + '.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      const total = keys.reduce((s, k) => s + (buckets[k].n || 0), 0);
+      $('trafficStatus').textContent =
+        `Exported ${keys.length} buckets, ${total} drives. Upload to data/samples/ in the traffic repo.`;
+    } catch (e) {
+      $('trafficStatus').textContent = 'Export failed.';
+    }
+  }
+  function importTrafficModel(file) {
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const model = JSON.parse(r.result);
+        if (!model.buckets || typeof model.buckets !== 'object') throw new Error('bad model');
+        localStorage.setItem(LS_TRAFFIC_MODEL, JSON.stringify(model));
+        const n = Object.keys(model.buckets).length;
+        $('trafficStatus').textContent = `Imported model with ${n} buckets.`;
+        toast('Traffic model updated');
+      } catch (e) {
+        $('trafficStatus').textContent = 'Invalid model file.';
+      }
+    };
+    r.readAsText(file);
+  }
+  function loadTrafficModel() {
+    try {
+      const raw = localStorage.getItem(LS_TRAFFIC_MODEL);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
   /* ---------- Google Maps ---------- */
   function originLabel() {
     // If origin is GPS/current location, return empty so Google Maps uses
@@ -2044,6 +2112,14 @@
     $('setAutoCheckin').checked = !!settings.autoCheckin;
     $('setAutoConfirm').checked = !!settings.autoConfirmAll;
     $('setEarlySuggest').checked = settings.earlySuggest !== false;
+    $('trafficStatus').textContent = '';
+    $('trafficExport').onclick = exportTrafficData;
+    $('trafficImport').onclick = () => $('trafficFile').click();
+    $('trafficFile').onchange = (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) importTrafficModel(f);
+      e.target.value = '';
+    };
     $('setMode').value = settings.mode || 'work';
     updateModeHint();
     renderServiceTimes();
@@ -2331,7 +2407,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-201857' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261002-202750' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
