@@ -20,6 +20,7 @@
     lastSchedule: null,  // {at, arrivals: {stopId: arrivalMin}} from last optimize
     checkedIn: null,     // {stopId, startedAt} — currently being serviced (v1.9)
     returnActive: false, // return-to-start was baked into the current optimization
+    completedAt: null,   // timestamp when the last stop was marked done (auto-delete next day)
   };
   const settings = {
     defaultStart: '', avoidTolls: false, avoidHwy: false,
@@ -38,6 +39,7 @@
         preDriveMin: state.preDriveMin, preDriveSource: state.preDriveSource,
         warnSuppressed: state.warnSuppressed, lastSchedule: state.lastSchedule,
         checkedIn: state.checkedIn, returnActive: state.returnActive,
+        completedAt: state.completedAt,
       }));
       localStorage.setItem(LS_SET, JSON.stringify(settings));
     } catch (e) { /* storage full/blocked — app still works for the session */ }
@@ -60,6 +62,14 @@
         state.stops = r.stops || [];
         state.origin = r.origin || state.origin;
         state.optimized = !!r.optimized;
+        state.completedAt = r.completedAt || null;
+        // auto-delete: a route completed on a previous calendar day is wiped
+        if (state.completedAt && !isSameDay(state.completedAt, Date.now()) &&
+            state.stops.length && state.stops.every((x) => x.done)) {
+          wipeRouteData();
+          state.stops = [];
+          state.completedAt = null;
+        }
         state.matrixSource = r.matrixSource || null;
         state.preEstimateMin = r.preEstimateMin || 0;
         state.preDriveMin = (r.preDriveMin != null) ? r.preDriveMin : null;
@@ -101,6 +111,20 @@
 
   /* ---------- helpers ---------- */
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  function isSameDay(a, b) {
+    const da = new Date(a), db = new Date(b);
+    return da.getFullYear() === db.getFullYear() &&
+           da.getMonth() === db.getMonth() &&
+           da.getDate() === db.getDate();
+  }
+  function wipeRouteData() {
+    // erase all route traces from the device (auto-delete or manual clear)
+    try {
+      localStorage.removeItem(LS_ROUTE);
+      localStorage.removeItem('rr.route.backup');
+      localStorage.removeItem(LS_HIST);
+    } catch (e) {}
+  }
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -371,6 +395,12 @@
       s.done = !s.done;
       if (s.done && state.checkedIn && state.checkedIn.stopId === s.id) {
         state.checkedIn = null; // service finished with the stop
+      }
+      // track completion: all stops done -> auto-delete next day
+      if (state.stops.length && state.stops.every((x) => x.done)) {
+        state.completedAt = Date.now();
+      } else {
+        state.completedAt = null;
       }
       save(); render();
       if (s.done) maybeAutoReopt('done'); // fresh times + re-route around confirmed windows
@@ -1359,11 +1389,7 @@
     state.returnActive = false;
     $('mapWrap').hidden = true;
     $('mapToggle').textContent = '🗺 Map';
-    try {
-      // erase all route data — no backups or traces left on the device
-      localStorage.removeItem('rr.route.backup');
-      localStorage.removeItem(LS_HIST);
-    } catch (e) {}
+    wipeRouteData();
     save(); render();
     if (fromSettings) $('settingsSheet').hidden = true;
     toast('All stops cleared — fresh route ready');
@@ -1607,7 +1633,18 @@
   }
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { hiddenAt = Date.now(); saveUIState(); }
-    else { checkForUpdate(); maybeAutoReopt('visible'); } // reopened: fresh times + re-route
+    else {
+      // auto-delete check: a route completed yesterday is wiped on return
+      if (state.completedAt && !isSameDay(state.completedAt, Date.now()) &&
+          state.stops.length && state.stops.every((x) => x.done)) {
+        wipeRouteData();
+        state.stops = []; state.completedAt = null;
+        state.optimized = false; state.lastSchedule = null; state.returnActive = false;
+        save(); render();
+        toast('Yesterday\'s completed route was cleared');
+      }
+      checkForUpdate(); maybeAutoReopt('visible');
+    } // reopened: fresh times + re-route
   });
   window.addEventListener('pagehide', saveUIState);
   if ('serviceWorker' in navigator) {
