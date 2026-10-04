@@ -15,6 +15,9 @@ Last updated: 2026-10-03
 - **Never trust a subagent's completion report.** Check the files yourself. Grep for the promised change.
 - **Never trust a browser task's visual self-verification.** Pull the screenshots and look with your own eyes.
 - **Stale caches lie.** The shared browser profile keeps service workers and cached JS. When a test contradicts a direct curl, trust the curl and clear the profile.
+- **Deduplication claims must be verified against live remote state.** Local inventory can be stale; remote is ground truth.
+- **Audit state before repairing state.** Compare SHAs/hashes before assuming damage. A 409 or error might be a transient race, not corruption.
+- **Memory writes get verified.** After saving, re-read the entry. A wrong memory corrupts future work.
 
 ## 2. Code Quality (Non-Negotiable)
 
@@ -23,18 +26,24 @@ Last updated: 2026-10-03
 - **No secrets, tokens, or API keys in code, files, or chat.** Ever. Environment files only, never committed.
 - **No dead code or commented-out blocks.** Delete it. Git remembers.
 - **Consistent naming.** Pick a convention and stick to it across the file.
-- **Input validation on every endpoint.** Reject impossible values with 400, not 500. Validate types, ranges, required fields.
+- **Input validation on every endpoint.** Reject impossible values with 400, not 500. Validate types, ranges, required fields. Reject non-finite floats (NaN, Infinity).
 - **No stack traces in external error responses.** Log them internally, return generic messages.
 - **Request body size limits.** Default 5MB, explicit exceptions where needed.
+- **Build tools, fix root causes.** When the same error repeats, stop retrying and fix the cause. If you do the same check three times, automate it.
+- **Research before first use.** New tool, API, or service: read the docs, understand capabilities and limits, know the gotchas — before writing code against it.
+- **Service startup must not fatally depend on dependencies.** If the DB is down at boot, log a warning and continue — don't crash. Retry on first request.
 
 ## 3. Deployment Discipline
 
+- **Interview before any project.** Ask ALL clarifying questions upfront in one batch — requirements, scope, what "done" looks like, constraints. Then write a tech spec, then build. Never start on assumptions.
+- **Tech spec for every project.** What it does, exact requirements, data sources, plan, how it will be verified. Think the whole job through before acting.
 - **Never deploy with red tests.** CI must be green.
 - **Never deploy with incomplete verification.** If you can't verify it, say so — don't ship it.
 - **Pin versions, never `:latest`.** Every deploy tags exact versions. Rollback = point at previous tag.
 - **Database migrations are reversible.** Every schema change has a down-migration. Dump before migrating.
 - **The production server is never a debugging environment.** Debug locally, deploy verified code.
 - **Blue-green for critical services.** New version runs alongside old, switch only after health checks pass.
+- **Scrutinize and debug before server, verify before deploy.** Nothing touches the server without code review, local debugging, load testing, and security review first.
 
 ## 4. Architecture Principles
 
@@ -82,16 +91,58 @@ Last updated: 2026-10-03
 
 ## 10. Gotchas (Learned the Hard Way)
 
+### Docker & Infrastructure
 - **Docker bypasses ufw.** Use `-p 127.0.0.1:port:port` binding, not firewall rules.
-- **Span-replacement can delete whole functions.** Diff function inventory before/after every automated edit.
+- **Valhalla image has no entrypoint.** Must pass the command explicitly: `valhalla_service /custom_files/config.json 1`.
+- **Use systemd for service persistence.** `nohup` and backgrounded SSH commands die on disconnect. Systemd auto-restarts on failure.
+- **Backup scripts must reference correct names.** After any rename, grep all scripts for stale references.
+- **5GB+ reclaimable in Docker.** Run `docker builder prune` and remove unused images periodically.
+
+### Code Editing
+- **Span-replacement can delete whole functions.** Diff function inventory (`grep -n "^function\|^def\|^class"`) before/after every automated edit.
 - **Moving UI elements? Delete the original.** Duplicate IDs render dead.
 - **iOS caches aggressively.** Use versioned filenames for every revision.
-- **Postgres `with conn:` commits on exit.** If writes aren't persisting, check you're connected to the right database (we once had `routerunner` vs `routerrunner`).
-- **GitHub secret scanning blocks pushes** containing contiguous `pk.*` tokens. Split tokens in build scripts.
+- **Python `with conn:` commits on exit.** If writes aren't persisting, check you're connected to the right database.
+
+### Python Quirks
+- **Banker's rounding:** `round(36.15, 1) == 36.1`, not 36.2. Use `Decimal` when exact rounding matters.
+- **httpx picks up proxy env vars.** Use `trust_env=False` for localhost URLs in sandboxed environments.
+- **`bool` is a subclass of `int`.** Validate `isinstance(x, bool)` first when distinguishing them.
+
+### GitHub API
+- **Secret scanning blocks pushes** containing contiguous `pk.*` tokens. Split tokens in build scripts.
 - **Empty folders don't sync via git.** Seed with a placeholder file.
+- **Contents API 409 on empty repo.** Seed the initial commit via PUT /contents, then use git-data API.
+- **Branch existence check returns 409 (not 404)** on empty repos. Treat both as empty.
+
+### Testing & Pentesting
+- **Pentest only against scratch databases.** Never drop/create on the live DB. A sanctioned pentest that destroys data is still destruction.
+- **`/health` is intentionally public.** Monitoring needs keyless access. Auth tests should target authenticated endpoints.
+- **OR-Tools burns the full time budget** on every solve (GILS never terminates early). Set explicit short defaults (5s), not 30s.
+
+---
+
+## 11. Working with Aaron
+
+- **He dictates the flow.** Never end responses with a follow-up question. Never steer without direct instruction.
+- **Honest pushback, not default agreement.** If something is a bad idea, say so with reasons.
+- **Concise, decisive, phone-friendly.** Outcome first, no walls of text.
+- **Ask all questions upfront, in one batch.** Then spec, then build. Never start unclear and fix through corrections.
+- **Hold finished work for his word.** Nothing posts, publishes, or deploys without his explicit go-ahead.
+- **When blocked, build the workaround.** Don't report the problem — overcome it and verify the fix.
+
+---
+
+## 12. Multi-Agent Work
+
+- **Use a coordinator with specialist workers and an auditor.** Standard for any significant task.
+- **Supervisor = recurring cron, not a long-lived subagent.** Subagents die on runtime restart. A 5-minute cron with a state file checks worker liveness and restarts stalled workers.
+- **Bound parallelism by the scarcest resource.** API quotas, memory, disk — check before launching parallel workers.
+- **Audit labels must cross-check process liveness.** A task with no live process is STALE, not RUNNING.
+- **Verify worker outputs independently.** A completion report is a claim, not evidence.
 
 ---
 
 ## Changelog
 
-- 2026-10-03: Initial document. Codified all standing rules + lessons from RouteRunner backend build.
+- 2026-10-03: Backfilled with all lessons from RouteRunner frontend, backend build, security audit, and testing setup. Added §§11-12, expanded §§1-3, 10.
