@@ -4,7 +4,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261004-034835';
+  const RR_BUILD = '20261004-041339';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
   const LS_TRAFFIC = 'rr.traffic.learn.v1';
@@ -386,9 +386,6 @@
     $('stopCount').textContent = total ? '(' + total + ')' : '';
     $('listTitle').textContent = isWorkMode() ? 'Appointments' : 'Stops';
     $('clearAllBtn').style.display = total ? '' : 'none';
-    // Manual button label follows the profile (spec §4).
-    const mBtn = $('manualBtn').querySelector('span');
-    if (mBtn) mBtn.textContent = isWorkMode() ? 'Add Appointment' : 'Add Stop';
 
     const ul = $('stopList');
     ul.innerHTML = '';
@@ -804,41 +801,36 @@
     return b ? '&lat=' + b.lat.toFixed(4) + '&lon=' + b.lon.toFixed(4) : '';
   }
   /* Search box: universal dropdown (saved locations first, then live search).
-   * onSearchPick replicates the legacy add-stop behavior. */
+   * Selecting an address opens the Add Appointment dialog with the address
+   * pre-filled — it never adds a stop directly. */
   function onSearchPick(v) {
-    addStops([{
-      id: uid(),
-      street: v.street || v.label || '',
-      city: v.city || '',
-      state: v.state || '',
-      zip: v.zip || '',
-      jobType: '', note: '',
-      lat: v.lat, lng: v.lng,
-      geocodeSource: v.fromSaved ? 'saved' : 'search',
-      done: false, isLast: false, isFirst: false,
-      confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
-    }]);
     $('searchInput').value = '';
-    toast('\u2713 Stop added');
+    openApptDialog(v);
   }
   attachAddressDropdown('searchInput', 'suggestList', 'searchWrap', onSearchPick);
 
   /* ---------- add: manual form ---------- */
-  // NOTE: manualBtn now opens the Add Appointment dialog (spec §5).
-  // The old inline manualForm is kept hidden for backwards compat.
-  $('manualBtn').onclick = () => { openApptDialog(); };
+  // NOTE: the old inline manualForm is kept hidden for backwards compat.
+  // The Add Appointment dialog is now opened by selecting an address from
+  // the search bar (openApptDialog), not by a standalone button.
 
   /* ---------- add appointment dialog (spec §5) ---------- */
   let apptPicked = null; // {label, street, city, state, zip, lat, lng} from dropdown
-  function openApptDialog() {
+  function openApptDialog(pick) {
     const work = isWorkMode();
     $('apptTitle').textContent = work ? '➕ Add Appointment' : '➕ Add Stop';
+    $('apptSave').textContent = work ? 'Add Appointment' : 'Add Stop';
     $('apptJobRow').style.display = work ? '' : 'none';
     $('apptTime').value = '';
     $('apptAnytime').checked = false;
     $('apptTime').disabled = false;
-    $('apptAddr').value = '';
-    apptPicked = null;
+    if (pick) {
+      $('apptAddr').value = pick.label || '';
+      apptPicked = pick;
+    } else {
+      $('apptAddr').value = '';
+      apptPicked = null;
+    }
     $('apptNewJobWrap').hidden = true;
     $('apptNewJob').value = '';
     refreshApptJobTypes();
@@ -3224,7 +3216,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261004-034835' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261004-041339' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
