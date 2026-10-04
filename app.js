@@ -1,9 +1,10 @@
 /* RouteRunner app.js — UI wiring. Pure-algorithm work lives in core.js (window.RouteCore). */
+/* global RouteCore: readonly */
 (function () {
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261002-203451';
+  const RR_BUILD = '20261004-034835';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
   const LS_TRAFFIC = 'rr.traffic.learn.v1';
@@ -11,6 +12,8 @@
   const state = {
     stops: [],           // display order = route order
     origin: { type: 'gps', label: 'Current location', lat: null, lng: null },
+    tripStart: null,     // {label, lat, lng} | null — pinned Start row. Null = auto from GPS at optimize time.
+    tripEnd: null,       // {label, lat, lng} | null — pinned End row. Null = skipped silently on optimize.
     optimized: false,
     matrixSource: null,  // 'osrm' | 'haversine'
     pinModeStopId: null,
@@ -26,12 +29,16 @@
     returnActive: false, // return-to-start was baked into the current optimization
     endActive: false, // default end address was baked into the current optimization
     completedAt: null,   // timestamp when the last stop was marked done (auto-delete next day)
+    locationPrecision: 'unknown', // 'precise' | 'approximate' | 'unknown' — from GPS accuracy
   };
   const settings = {
     defaultStart: '', defaultEnd: '', avoidTolls: false, avoidHwy: false,
     returnToStart: false, saveHistory: false, autoCheckin: false, autoConfirmAll: false, mode: 'work', // 'work' | 'personal'
     serviceTimes: { default: 45, byJobType: {}, known: [] },
     earlySuggest: true, // suggest early-arrival swaps that save drive time
+    homeLocation: null, // {city, state, lat, lng} — user's base area for geocode bias. Null = not set yet.
+    savedLocations: [], // [{name, address, lat, lng}] — starred saved places
+    customJobTypes: [], // user-added job types for the appointment dialog
   };
   const isWorkMode = () => settings.mode !== 'personal';
 
@@ -40,6 +47,7 @@
     try {
       localStorage.setItem(LS_ROUTE, JSON.stringify({
         stops: state.stops, origin: state.origin,
+        tripStart: state.tripStart, tripEnd: state.tripEnd,
         optimized: state.optimized, matrixSource: state.matrixSource,
         preEstimateMin: state.preEstimateMin, lastEstimate: state.lastEstimate,
         preDriveMin: state.preDriveMin, preDriveSource: state.preDriveSource,
@@ -49,11 +57,12 @@
         completedAt: state.completedAt,
       }));
       localStorage.setItem(LS_SET, JSON.stringify(settings));
-    } catch (e) { /* storage full/blocked — app still works for the session */ }
+    } catch { /* storage full/blocked — app still works for the session */ }
   }
   function load() {
     try {
-      const s = JSON.parse(localStorage.getItem(LS_SET) || 'null');
+      const rawSettings = localStorage.getItem(LS_SET);
+      const s = JSON.parse(rawSettings || 'null');
       if (s) {
         // Forward-migration across updates: keep stored values only for
         // settings this version still defines, and only when the type still
@@ -64,10 +73,22 @@
         }
         if (settings.mode !== 'work' && settings.mode !== 'personal') settings.mode = 'work';
       }
+      // Home location: optional manual override only. GPS is the source of
+      // truth — never default to any city, never prompt. If a stored value
+      // is malformed, fall back to null (unbiased).
+      var hl = settings.homeLocation;
+      var hlValid = hl && typeof hl === 'object' &&
+        typeof hl.city === 'string' && hl.city.trim() &&
+        typeof hl.state === 'string' && hl.state.trim();
+      if (!hlValid) {
+        settings.homeLocation = null;
+      }
       const r = JSON.parse(localStorage.getItem(LS_ROUTE) || 'null');
       if (r) {
         state.stops = r.stops || [];
         state.origin = r.origin || state.origin;
+        state.tripStart = RouteCore.normalizeEndpoint(r.tripStart);
+        state.tripEnd = RouteCore.normalizeEndpoint(r.tripEnd);
         state.optimized = !!r.optimized;
         state.completedAt = r.completedAt || null;
         // auto-delete: a route completed on a previous calendar day is wiped
@@ -100,7 +121,7 @@
         state.returnActive = !!r.returnActive;
         state.endActive = !!r.endActive;
       }
-    } catch (e) {}
+    } catch {}
     /* sanitize service-time settings (forward-migration safe) */
     try {
       const st = settings.serviceTimes || {};
@@ -113,11 +134,30 @@
         const v = settings.serviceTimes.byJobType[k];
         if (typeof v !== 'number' || v < 15 || v > 480) delete settings.serviceTimes.byJobType[k];
       });
-    } catch (e) {
+    } catch {
       settings.serviceTimes = { default: 45, byJobType: {}, known: [] };
     }
     if (settings.defaultStart && state.origin.type === 'gps' && !state.origin.lat) {
       state.origin = { type: 'address', label: settings.defaultStart, lat: null, lng: null };
+    }
+    // Sanitize saved locations and custom job types (forward-migration safe).
+    try {
+      settings.savedLocations = (Array.isArray(settings.savedLocations) ? settings.savedLocations : [])
+        .filter((s) => s && typeof s === 'object' && typeof s.name === 'string')
+        .slice(0, 100)
+        .map((s) => ({
+          name: String(s.name).trim().slice(0, 120),
+          address: String(s.address || '').trim().slice(0, 300),
+          lat: typeof s.lat === 'number' && isFinite(s.lat) ? s.lat : null,
+          lng: typeof s.lng === 'number' && isFinite(s.lng) ? s.lng : null,
+        }));
+      settings.customJobTypes = (Array.isArray(settings.customJobTypes) ? settings.customJobTypes : [])
+        .filter((t) => typeof t === 'string' && t.trim())
+        .map((t) => String(t).trim().slice(0, 80))
+        .slice(0, 60);
+    } catch {
+      settings.savedLocations = [];
+      settings.customJobTypes = [];
     }
   }
 
@@ -135,7 +175,7 @@
       localStorage.removeItem(LS_ROUTE);
       localStorage.removeItem('rr.route.backup');
       localStorage.removeItem(LS_HIST);
-    } catch (e) {}
+    } catch {}
   }
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -152,7 +192,7 @@
       const ua = String(navigator.userAgent || '');
       isMobile = /iPad|iPhone|iPod|Android/i.test(ua) ||
                  (navigator.maxTouchPoints > 1 && /Mac/i.test(ua));
-    } catch (e) {}
+    } catch {}
     // desktop browsers are exempt — the gate is for phones only
     if (standalone || !isMobile) return;
     const ua = String(navigator.userAgent || '');
@@ -205,10 +245,6 @@
       }
     });
     return changed;
-  }
-  function nowMinutes() {
-    const n = new Date();
-    return n.getHours() * 60 + n.getMinutes();
   }
   /* Departure for schedule math: right now, unless checked into a stop — then
    * departures begin when the remaining service time runs out. */
@@ -263,7 +299,7 @@
         r.matrix, pts.map((_, i) => i), 'osrm');
       state.preDriveSource = 'osrm';
       save(); render();
-    } catch (e) { /* keep the rough estimate */ }
+    } catch { /* keep the rough estimate */ }
   }
   let toastTimer = null;
   function toast(msg, action) {
@@ -280,6 +316,62 @@
     toastTimer = setTimeout(() => { t.hidden = true; }, action ? 6000 : 2800);
   }
 
+  /* ---------- start/end pinned rows (spec §1) ---------- */
+  // Auto-fill label from GPS when the endpoint is unset.
+  function endpointDisplay(which) {
+    const ep = which === 'start' ? state.tripStart : state.tripEnd;
+    const norm = RouteCore.normalizeEndpoint(ep);
+    if (norm) return norm;
+    // Fall back to live GPS for the Start row only.
+    if (which === 'start' && devicePos) {
+      return { label: 'Current location', lat: devicePos.lat, lng: devicePos.lng };
+    }
+    return null;
+  }
+  function renderEndpointRows(ul) {
+    [['start', '▶', 'Start'], ['end', '■', 'End']].forEach(([which, icon, word]) => {
+      const disp = endpointDisplay(which);
+      const saved = disp && RouteCore.isSavedLocation(settings.savedLocations, disp);
+      const li = document.createElement('li');
+      li.className = 'stop endpoint-row' + (which === 'end' ? ' end-row' : '');
+      li.dataset.endpoint = which;
+      li.innerHTML =
+        '<span class="num">' + icon + '</span>' +
+        '<div class="info"><div class="addr">' + esc(disp ? disp.label : word + ' — not set') + '</div>' +
+        '<div class="meta"><span class="chip">' + (which === 'start' ? '▶ start' : '■ end') + '</span>' +
+        (disp && disp.lat == null ? '<span class="chip warn">📍 no location</span>' : '') +
+        '</div></div>' +
+        '<div class="acts">' +
+          '<button class="star-btn' + (saved ? ' on' : '') + '" data-act="star-endpoint" data-which="' + which + '" title="' +
+            (saved ? 'Unsave this location' : 'Save this location') + '">' + (saved ? '⭐' : '☆') + '</button>' +
+          (disp ? '<button data-act="clear-endpoint" data-which="' + which + '" title="Clear">✕</button>' : '') +
+        '</div>';
+      ul.appendChild(li);
+    });
+  }
+  // Tap an endpoint row body → open the address editor sheet.
+  let editingEndpoint = null; // 'start' | 'end' | null
+  function openEndpointEditor(which) {
+    editingEndpoint = which;
+    const disp = endpointDisplay(which);
+    $('epTitle').textContent = (which === 'start' ? '▶ Start location' : '■ End location');
+    $('epInput').value = disp && disp.label !== 'Current location' ? disp.label : '';
+    $('epInput')._ddClose && $('epInput')._ddClose();
+    $('epSheet').hidden = false;
+    setTimeout(() => $('epInput').focus(), 50);
+    updateEpStar();
+  }
+  function updateEpStar() {
+    const btn = $('epStar');
+    const q = $('epInput').value.trim();
+    const disp = editingEndpoint ? endpointDisplay(editingEndpoint) : null;
+    const loc = q ? { name: q, address: q, lat: null, lng: null } : disp;
+    const on = loc && RouteCore.isSavedLocation(settings.savedLocations, loc);
+    btn.classList.toggle('on', !!on);
+    btn.textContent = on ? '⭐' : '☆';
+    btn.title = on ? 'Unsave this location' : 'Save this location';
+  }
+
   /* ---------- render ---------- */
   function render() {
     $('routeDate').textContent = new Date().toLocaleDateString(undefined,
@@ -294,9 +386,14 @@
     $('stopCount').textContent = total ? '(' + total + ')' : '';
     $('listTitle').textContent = isWorkMode() ? 'Appointments' : 'Stops';
     $('clearAllBtn').style.display = total ? '' : 'none';
+    // Manual button label follows the profile (spec §4).
+    const mBtn = $('manualBtn').querySelector('span');
+    if (mBtn) mBtn.textContent = isWorkMode() ? 'Add Appointment' : 'Add Stop';
 
     const ul = $('stopList');
     ul.innerHTML = '';
+    // Pinned Start / End rows (spec §1): always at the top, above stop #1.
+    renderEndpointRows(ul);
     $('emptyHint').style.display = total ? 'none' : 'block';
     if (!total) {
       $('emptyHint').textContent = isWorkMode()
@@ -357,6 +454,7 @@
         '</div></div>' +
         '<div class="acts">' +
           (work ? '<button class="confirm-btn' + (s.confirmed ? ' on' : '') + '" data-act="confirm" title="Confirm appointment window">⏰</button>' : '') +
+          (() => { const sv = RouteCore.isSavedLocation(settings.savedLocations, { address: stopLabel(s), lat: s.lat, lng: s.lng }); return '<button class="star-btn' + (sv ? ' on' : '') + '" data-act="star" title="' + (sv ? 'Unsave this location' : 'Save this location') + '">' + (sv ? '⭐' : '☆') + '</button>'; })() +
           '<button class="check-btn' + (s.done ? ' on' : '') + '" data-act="check" title="' + (s.done ? 'Reopen stop' : 'Mark done') + '">✓</button>' +
           '<button data-act="first" title="Set as first stop">🚩</button>' +
           '<button data-act="last" title="Set as last stop">🏁</button>' +
@@ -376,14 +474,17 @@
         '<div class="meta"><span class="chip last">🏁 last stop</span></div></div>';
       ul.appendChild(li);
     }
-    if (state.endActive && state.optimized && settings.defaultEnd) {
-      const li = document.createElement('li');
-      li.className = 'stop is-last return-row';
-      li.innerHTML =
-        '<span class="num">🏠</span>' +
-        '<div class="info"><div class="addr">' + esc(settings.defaultEnd) + '</div>' +
-        '<div class="meta"><span class="chip last">🏠 home</span></div></div>';
-      ul.appendChild(li);
+    if (state.endActive && state.optimized) {
+      const endLabel = (state.tripEnd && state.tripEnd.label) || settings.defaultEnd || '';
+      if (endLabel) {
+        const li = document.createElement('li');
+        li.className = 'stop is-last return-row';
+        li.innerHTML =
+          '<span class="num">🏠</span>' +
+          '<div class="info"><div class="addr">' + esc(endLabel) + '</div>' +
+          '<div class="meta"><span class="chip last">🏠 home</span></div></div>';
+        ul.appendChild(li);
+      }
     }
 
     // status line
@@ -429,6 +530,29 @@
     const btn = e.target.closest('button[data-act]');
     const li = e.target.closest('li.stop');
     if (!li) return;
+    // Pinned start/end rows (spec §1): handled separately from stops.
+    if (li.dataset.endpoint) {
+      const which = li.dataset.endpoint;
+      const act = btn ? btn.dataset.act : null;
+      if (act === 'star-endpoint') {
+        const disp = endpointDisplay(which);
+        const loc = disp ? { name: disp.label, address: disp.label, lat: disp.lat, lng: disp.lng }
+                         : { name: which === 'start' ? 'Start' : 'End', address: '', lat: null, lng: null };
+        const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
+        settings.savedLocations = r.saved;
+        save(); render();
+        toast(r.added ? '⭐ Saved "' + loc.name + '"' : '☆ Unsaved');
+        return;
+      }
+      if (act === 'clear-endpoint') {
+        if (which === 'start') state.tripStart = null; else state.tripEnd = null;
+        markDirty(which === 'start' ? 'Start cleared — will use GPS' : 'End cleared');
+        return;
+      }
+      // Tap body → open the address editor.
+      openEndpointEditor(which);
+      return;
+    }
     const s = state.stops.find((x) => x.id === li.dataset.id);
     if (!s) return;
     if (!btn) { // tapped body — if needs pin, enter pin mode
@@ -464,6 +588,21 @@
     }
     else if (act === 'confirm') {
       openWindowPopup(s); // new or edit: popup offers confirm/update/remove
+    }
+    else if (act === 'star') {
+      const loc = {
+        name: stopLabel(s), address: stopLabel(s),
+        lat: typeof s.lat === 'number' ? s.lat : null,
+        lng: typeof s.lng === 'number' ? s.lng : null,
+      };
+      // Confirm unsave when the route is optimized (location is in active use).
+      if (RouteCore.isSavedLocation(settings.savedLocations, loc) && state.optimized) {
+        if (!confirm('Unsave "' + loc.name + '"?')) return;
+      }
+      const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
+      settings.savedLocations = r.saved;
+      save(); render();
+      toast(r.added ? '⭐ Saved' : '☆ Unsaved');
     }
     else if (act === 'checkin') {
       const ci = state.checkedIn;
@@ -534,14 +673,16 @@
   });
 
   // drag reorder (touch-friendly via SortableJS)
-  new Sortable($('stopList'), {
+  if (typeof Sortable !== 'undefined') {
+    new Sortable($('stopList'), {
     handle: '.drag', animation: 150, delay: 120, delayOnTouchOnly: true,
     onEnd: () => {
       const order = [...$('stopList').children].map((li) => li.dataset.id);
       state.stops.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
       markDirty('Order updated — re-optimize to re-route');
     },
-  });
+    });
+  }
 
   /* ---------- confirmed-stop time window popup (v1.9) ---------- */
   let winStopId = null;
@@ -648,100 +789,238 @@
   };
 
   /* ---------- add: search ---------- */
-  let searchTimer = null, searchToken = 0;
-  $('searchInput').addEventListener('input', (e) => {
-    clearTimeout(searchTimer);
-    const q = e.target.value.trim();
-    if (q.length < 4) { $('suggestList').hidden = true; return; }
-    searchTimer = setTimeout(() => searchPhoton(q, ++searchToken), 350);
-  });
-  async function searchPhoton(q, myToken) {
-    try {
-      const list = $('suggestList');
-      list.innerHTML = '';
-      const hasHouseNum = /^\d+\s+\S/.test(q);
-      // Census exact match: run in parallel with Photon, show first.
-      const censusP = hasHouseNum
-        ? fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=' + encodeURIComponent(q + ', Nashville, TN'))
-            .then((r) => r.json()).catch(() => null)
-        : Promise.resolve(null);
-      const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
-        '&limit=6&lat=36.1627&lon=-86.7816').then((r) => r.json()).catch(() => null);
-      const [cj, j] = await Promise.all([censusP, photonP]);
-      if (myToken !== searchToken) return; // stale — user kept typing
-      list.innerHTML = '';
-      // Nominatim exact match FIRST (CORS-friendly, has house numbers).
-      const nm = cj && cj[0];
-      if (nm && nm.address && nm.address.house_number) {
-        const a = nm.address;
-        const street = [(a.house_number || ''), (a.road || '')].filter(Boolean).join(' ');
-        const city = a.city || a.town || a.village || 'Nashville';
-        // Clean display: "2720 Eugenia Avenue, Nashville, TN 37211"
-        const cleanAddr = [street, city, 'TN ' + (a.postcode || '')].filter(Boolean).join(', ');
-        const li = document.createElement('li');
-        li.innerHTML = '✓ <b>' + esc(cleanAddr) + '</b><small>Exact address match</small>';
-        li.onclick = () => {
-          addStops([{
-            id: uid(),
-            street: street || q,
-            city: city,
-            state: 'TN', zip: a.postcode || '',
-            jobType: '', note: '',
-            lat: parseFloat(nm.lat), lng: parseFloat(nm.lon),
-            geocodeSource: 'nominatim-exact',
-            done: false, isLast: false, isFirst: false,
-            confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
-          }]);
-          $('searchInput').value = '';
-          list.hidden = true;
-          toast('✓ Stop added');
-        };
-        list.appendChild(li);
-      }
-      (j && j.features || []).forEach((f) => {
-        const p = f.properties || {};
-        const label = [p.name, p.street, p.city, p.state, p.postcode].filter(Boolean)
-          .filter((v, i, a) => a.indexOf(v) === i).join(', ');
-        const li = document.createElement('li');
-        li.innerHTML = esc(label || 'Unnamed place') +
-          '<small>' + esc([p.city, p.state].filter(Boolean).join(', ')) + '</small>';
-        li.onclick = () => {
-          const [lng, lat] = f.geometry.coordinates;
-          // Preserve house number from query if Photon result lacks it.
-          const qNum = (q.match(/^\d+/) || [])[0] || '';
-          let pStreet = [p.housenumber, p.street].filter(Boolean).join(' ') ||
-                        [p.name, p.street].filter(Boolean).join(' ') || label;
-          if (qNum && pStreet && !new RegExp('^' + qNum + '\\b').test(pStreet)) {
-            const qStreet = q.replace(/^\d+\s+/, '').toLowerCase();
-            if (pStreet.toLowerCase().includes(qStreet.split(' ')[0])) {
-              pStreet = qNum + ' ' + pStreet;
-            }
-          }
-          addStops([{
-            id: uid(), street: pStreet,
-            city: p.city || '', state: p.state || '', zip: p.postcode || '',
-            jobType: '', note: '', lat, lng, geocodeSource: 'search',
-            done: false, isLast: false, isFirst: false, confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
-          }]);
-          $('searchInput').value = '';
-          list.hidden = true;
-        };
-        list.appendChild(li);
-      });
-      list.hidden = !list.children.length;
-    } catch (e) { /* offline — suggestions unavailable */ }
+  /* Geocode query suffix: GPS is the source of truth — when we have a fix,
+   * no city suffix is needed (coordinate bias handles it). The optional
+   * homeLocation override still appends its city for disambiguation. */
+  function homeSuffix() {
+    if (devicePos) return '';
+    return RouteCore.geocodeSuffix(settings.homeLocation);
   }
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('#searchWrap')) $('suggestList').hidden = true;
-  });
+  /* Photon API bias params: GPS fix first, then homeLocation override,
+   * then no bias. Never hardcoded. */
+  function photonBiasParams() {
+    const src = devicePos || settings.homeLocation;
+    const b = RouteCore.photonBias(src);
+    return b ? '&lat=' + b.lat.toFixed(4) + '&lon=' + b.lon.toFixed(4) : '';
+  }
+  /* Search box: universal dropdown (saved locations first, then live search).
+   * onSearchPick replicates the legacy add-stop behavior. */
+  function onSearchPick(v) {
+    addStops([{
+      id: uid(),
+      street: v.street || v.label || '',
+      city: v.city || '',
+      state: v.state || '',
+      zip: v.zip || '',
+      jobType: '', note: '',
+      lat: v.lat, lng: v.lng,
+      geocodeSource: v.fromSaved ? 'saved' : 'search',
+      done: false, isLast: false, isFirst: false,
+      confirmed: false, twStart: null, twEnd: null, apptMin: null, source: 'search',
+    }]);
+    $('searchInput').value = '';
+    toast('\u2713 Stop added');
+  }
+  attachAddressDropdown('searchInput', 'suggestList', 'searchWrap', onSearchPick);
 
   /* ---------- add: manual form ---------- */
-  $('manualBtn').onclick = () => {
-    const f = $('manualForm');
-    f.hidden = !f.hidden;
-    $('mJob').style.display = isWorkMode() ? '' : 'none'; // job type is a work concept
-    if (!f.hidden) $('mStreet').focus();
-  };
+  // NOTE: manualBtn now opens the Add Appointment dialog (spec §5).
+  // The old inline manualForm is kept hidden for backwards compat.
+  $('manualBtn').onclick = () => { openApptDialog(); };
+
+  /* ---------- add appointment dialog (spec §5) ---------- */
+  let apptPicked = null; // {label, street, city, state, zip, lat, lng} from dropdown
+  function openApptDialog() {
+    const work = isWorkMode();
+    $('apptTitle').textContent = work ? '➕ Add Appointment' : '➕ Add Stop';
+    $('apptJobRow').style.display = work ? '' : 'none';
+    $('apptTime').value = '';
+    $('apptAnytime').checked = false;
+    $('apptTime').disabled = false;
+    $('apptAddr').value = '';
+    apptPicked = null;
+    $('apptNewJobWrap').hidden = true;
+    $('apptNewJob').value = '';
+    refreshApptJobTypes();
+    updateApptStar();
+    $('apptSheet').hidden = false;
+    setTimeout(() => $('apptAddr').focus(), 50);
+  }
+  function refreshApptJobTypes() {
+    const sel = $('apptJob');
+    const types = RouteCore.collectAllJobTypes(
+      settings.serviceTimes.known, settings.customJobTypes, state.stops);
+    sel.innerHTML = '<option value="">— No type —</option>' +
+      types.map((t) => '<option value="' + esc(t) + '">' + esc(t) + '</option>').join('') +
+      '<option value="__new__">＋ Add new type…</option>';
+  }
+  function updateApptStar() {
+    const btn = $('apptStar');
+    const q = $('apptAddr').value.trim();
+    const loc = apptPicked
+      ? { name: apptPicked.label, address: apptPicked.label, lat: apptPicked.lat, lng: apptPicked.lng }
+      : (q ? { name: q, address: q, lat: null, lng: null } : null);
+    const on = loc && RouteCore.isSavedLocation(settings.savedLocations, loc);
+    btn.classList.toggle('on', !!on);
+    btn.textContent = on ? '⭐' : '☆';
+  }
+  // Wire the address dropdown once (idempotent).
+  let apptDdWired = false;
+  function wireApptDialog() {
+    if (apptDdWired) return;
+    apptDdWired = true;
+    attachAddressDropdown('apptAddr', 'apptAddrSuggest', 'apptAddrWrap', (v) => {
+      $('apptAddr').value = v.label;
+      apptPicked = v;
+      updateApptStar();
+    });
+    $('apptAddr').addEventListener('input', () => { apptPicked = null; updateApptStar(); });
+    $('apptAnytime').addEventListener('change', () => {
+      $('apptTime').disabled = $('apptAnytime').checked;
+      if ($('apptAnytime').checked) $('apptTime').value = '';
+    });
+    $('apptJob').addEventListener('change', () => {
+      $('apptNewJobWrap').hidden = $('apptJob').value !== '__new__';
+      if ($('apptJob').value === '__new__') setTimeout(() => $('apptNewJob').focus(), 50);
+    });
+    $('apptNewJobAdd').onclick = () => {
+      const name = $('apptNewJob').value.trim();
+      if (!name) { toast('Enter a job type name'); return; }
+      settings.customJobTypes = RouteCore.addCustomJobType(settings.customJobTypes, name);
+      save();
+      refreshApptJobTypes();
+      $('apptJob').value = name;
+      $('apptNewJobWrap').hidden = true;
+      $('apptNewJob').value = '';
+      toast('Job type added');
+    };
+    $('apptStar').onclick = () => {
+      const q = $('apptAddr').value.trim();
+      const loc = apptPicked
+        ? { name: apptPicked.label, address: apptPicked.label, lat: apptPicked.lat, lng: apptPicked.lng }
+        : (q ? { name: q, address: q, lat: null, lng: null } : null);
+      if (!loc) { toast('Enter an address first'); return; }
+      const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
+      settings.savedLocations = r.saved;
+      save(); updateApptStar(); render();
+      toast(r.added ? '⭐ Saved' : '☆ Unsaved');
+    };
+    $('apptSave').onclick = () => {
+      const addr = $('apptAddr').value.trim();
+      if (!addr && !apptPicked) { toast('Enter an address'); return; }
+      const work = isWorkMode();
+      const anytime = $('apptAnytime').checked;
+      const timeVal = $('apptTime').value;
+      let apptMin = null, twStart = null, twEnd = null, confirmed = false;
+      if (!anytime && timeVal) {
+        apptMin = RouteCore.parseClockToMin(timeVal);
+        if (work) { confirmed = true; twStart = apptMin; twEnd = apptMin + 120; }
+      }
+      let jobType = '';
+      if (work) {
+        const jv = $('apptJob').value;
+        jobType = jv === '__new__' ? '' : jv;
+      }
+      const p = apptPicked || {};
+      const s = {
+        id: uid(),
+        street: p.street || addr, city: p.city || '', state: p.state || '', zip: p.zip || '',
+        jobType, note: '',
+        lat: typeof p.lat === 'number' ? p.lat : null,
+        lng: typeof p.lng === 'number' ? p.lng : null,
+        geocodeSource: p.lat != null ? 'appt-dialog' : null,
+        done: false, isLast: false, isFirst: false,
+        confirmed, twStart, twEnd, apptMin,
+        source: 'appt-dialog',
+      };
+      const added = addStops([s]);
+      $('apptSheet').hidden = true;
+      if (added) toast(work ? 'Appointment added' : 'Stop added');
+    };
+    const closeAppt = () => { $('apptSheet').hidden = true; };
+    $('apptClose').onclick = closeAppt;
+    $('apptCancel').onclick = closeAppt;
+  }
+  wireApptDialog();
+
+  /* ---------- endpoint editor wiring (spec §1) ---------- */
+  let epDdWired = false, epPicked = null;
+  function wireEndpointEditor() {
+    if (epDdWired) return;
+    epDdWired = true;
+    attachAddressDropdown('epInput', 'epSuggest', 'epWrap', (v) => {
+      $('epInput').value = v.label;
+      epPicked = v;
+      updateEpStar();
+    });
+    $('epInput').addEventListener('input', () => { epPicked = null; updateEpStar(); });
+    $('epStar').onclick = () => {
+      const q = $('epInput').value.trim();
+      const loc = epPicked
+        ? { name: epPicked.label, address: epPicked.label, lat: epPicked.lat, lng: epPicked.lng }
+        : (q ? { name: q, address: q, lat: null, lng: null } : null);
+      if (!loc) { toast('Enter an address first'); return; }
+      const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
+      settings.savedLocations = r.saved;
+      save(); updateEpStar(); render();
+      toast(r.added ? '⭐ Saved' : '☆ Unsaved');
+    };
+    $('epGps').onclick = () => {
+      if (!devicePos) { toast('No GPS fix yet'); return; }
+      // Reverse-geocode for a human label, but keep coords regardless.
+      const lat = devicePos.lat, lng = devicePos.lng;
+      fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lng,
+        { headers: { 'Accept': 'application/json' } })
+        .then((r) => r.ok ? r.json() : null)
+        .then((j) => {
+          const a = j && j.address;
+          const label = a ? [(a.house_number || ''), (a.road || '')].filter(Boolean).join(' ') +
+            ((a.city || a.town || a.village) ? ', ' + (a.city || a.town || a.village) : '')
+            : 'Current location';
+          setEndpoint(editingEndpoint, { label: label.trim() || 'Current location', lat, lng });
+        })
+        .catch(() => setEndpoint(editingEndpoint, { label: 'Current location', lat, lng }));
+    };
+    $('epSave').onclick = () => {
+      const q = $('epInput').value.trim();
+      if (epPicked) {
+        setEndpoint(editingEndpoint, { label: epPicked.label, lat: epPicked.lat, lng: epPicked.lng });
+      } else if (q) {
+        // Typed but not picked from dropdown — save as unlabeled, geocode in background.
+        setEndpoint(editingEndpoint, { label: q, lat: null, lng: null });
+        geocodeEndpoint(editingEndpoint);
+      } else {
+        setEndpoint(editingEndpoint, null);
+      }
+    };
+    $('epClose').onclick = () => { $('epSheet').hidden = true; editingEndpoint = null; };
+  }
+  function setEndpoint(which, ep) {
+    const norm = RouteCore.normalizeEndpoint(ep);
+    if (which === 'start') state.tripStart = norm; else state.tripEnd = norm;
+    $('epSheet').hidden = true;
+    editingEndpoint = null; epPicked = null;
+    markDirty(which === 'start' ? 'Start updated' : 'End updated');
+  }
+  // Geocode a typed-but-unpicked endpoint address in the background.
+  async function geocodeEndpoint(which) {
+    const ep = which === 'start' ? state.tripStart : state.tripEnd;
+    if (!ep || ep.lat != null || !ep.label) return;
+    try {
+      const r = await fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(ep.label) +
+        '&limit=1' + photonBiasParams());
+      const j = r.ok ? await r.json() : null;
+      const f = j && j.features && j.features[0];
+      if (f && f.geometry && f.geometry.coordinates) {
+        const [lng, lat] = f.geometry.coordinates;
+        if (which === 'start') state.tripStart = { label: ep.label, lat, lng };
+        else state.tripEnd = { label: ep.label, lat, lng };
+        save(); render();
+      }
+    } catch { /* offline — stays unlabeled */ }
+  }
+  wireEndpointEditor();
+
   $('mAdd').onclick = async () => {
     const street = $('mStreet').value.trim();
     if (!street) { toast('Enter at least a street address'); return; }
@@ -797,7 +1076,7 @@
         } catch (err) { console.warn('OCR failed for one image', err); }
       }
       await RR_OCR.done();
-    } catch (err) {
+    } catch {
       $('ocrOverlay').hidden = true;
       toast('Could not load the text reader — check connection and retry');
       return;
@@ -892,9 +1171,29 @@
     return false;
   }
 
-  // Default end address coordinates (cached; re-geocoded when the setting changes).
+  // End coordinates for optimization (spec §1): tripEnd wins; falls back to
+  // legacy settings.defaultEnd. Returns null when unset (skipped silently).
   let endCoordsCache = null, endCoordsFor = null;
   async function getEndCoords() {
+    const tripEnd = RouteCore.normalizeEndpoint(state.tripEnd);
+    if (tripEnd && tripEnd.lat != null) {
+      return { lat: tripEnd.lat, lng: tripEnd.lng };
+    }
+    if (tripEnd && tripEnd.label) {
+      const key = 'trip:' + tripEnd.label;
+      if (endCoordsCache && endCoordsFor === key) return endCoordsCache;
+      const tmp = { street: tripEnd.label, city: '', state: '', zip: '' };
+      const ok = await geocodeCensusOne(tmp).catch(() => false) ||
+                 await geocodeNominatim(tmp).catch(() => false);
+      if (ok && tmp.lat != null) {
+        endCoordsCache = { lat: tmp.lat, lng: tmp.lng };
+        endCoordsFor = key;
+        state.tripEnd = { label: tripEnd.label, lat: tmp.lat, lng: tmp.lng };
+        return endCoordsCache;
+      }
+      return null; // unlocatable: skipped silently
+    }
+    // Legacy fallback: settings.defaultEnd.
     const addr = (settings.defaultEnd || '').trim();
     if (!addr) return null;
     if (endCoordsCache && endCoordsFor === addr) return endCoordsCache;
@@ -913,7 +1212,10 @@
     return new Promise((resolve) => {
       if (!navigator.geolocation) return resolve(null);
       navigator.geolocation.getCurrentPosition(
-        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+        (p) => resolve({
+          lat: p.coords.latitude, lng: p.coords.longitude,
+          accuracy: p.coords.accuracy,
+        }),
         () => resolve(null), { timeout: 9000, maximumAge: 60000 });
     });
   }
@@ -925,7 +1227,10 @@
   let deviceWatchId = null;
   async function ensureDevicePos() {
     if (devicePos) return devicePos;
-    try { devicePos = await getGps(); } catch (e) { devicePos = null; }
+    try {
+      const g = await getGps();
+      if (g) setDevicePosFromGps({ lat: g.lat, lng: g.lng }, g.accuracy);
+    } catch { if (!devMode.pos) devicePos = null; }
     return devicePos;
   }
   /* Keep the blue dot tracking the device in real time. */
@@ -933,12 +1238,15 @@
     if (!('geolocation' in navigator) || deviceWatchId != null) return;
     try {
       deviceWatchId = navigator.geolocation.watchPosition((pos) => {
-        devicePos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setDevicePosFromGps(
+          { lat: pos.coords.latitude, lng: pos.coords.longitude },
+          pos.coords.accuracy
+        );
         if (deviceDot && mapObj) deviceDot.setLatLng([devicePos.lat, devicePos.lng]);
         adoptDevicePos();
         noteLegPosition(devicePos); // traffic learning: stationary detection
       }, () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 });
-    } catch (e) {}
+    } catch {}
   }
   /* Adopt the device position as the GPS origin (once known). */
   function adoptDevicePos() {
@@ -949,13 +1257,223 @@
     }
   }
 
+  /* ---------- GPS developer mode (hidden testing tool) ----------
+   * Activation: 5 rapid taps on the header brand (logo/title). No visible
+   * button — undiscoverable in normal use. While a virtual position is set,
+   * real GPS fixes are dropped so every devicePos consumer (blue dot,
+   * proximity check-in, leg tracking, origin adoption) operates on
+   * simulated data. Inactive: every dev path short-circuits — production
+   * behavior is untouched. Nothing here is ever written to localStorage. */
+  const devMode = {
+    active: false,        // panel opened via the tap sequence (enables dev writes)
+    pos: null,            // {lat, lng} virtual position, or null = no override
+    sim: false,           // simulation running
+    simTimer: null,
+    simIdx: 0,            // next waypoint index
+    simWaypoints: [],     // [{lat, lng}] remaining stops in route order
+  };
+  const DEV_TAPS_NEEDED = 5, DEV_TAP_WINDOW_MS = 2500;
+  const DEV_WALK_MPS = 1.4; // ~5 km/h walking pace (sim base speed)
+  let devTapTimes = [];
+
+  /* DEV badge: shown whenever dev mode is active, so simulated GPS is
+   * never mistaken for real. Reads "SIM GPS" while an override is in
+   * effect, plain "DEV" while active with no override set. */
+  function devUpdateBadge() {
+    const b = $('devBadge');
+    if (!b) return;
+    b.hidden = !devMode.active;
+    b.textContent = (devMode.active && devMode.pos) ? 'DEV · SIM GPS' : 'DEV';
+  }
+  /* Single entry point for virtual position writes (manual set + sim tick).
+   * Short-circuits when inactive: zero production behavior change. */
+  function devSetPos(lat, lng) {
+    if (!devMode.active) return;
+    if (!isFinite(lat) || !isFinite(lng)) return;
+    devMode.pos = { lat, lng };
+    devicePos = { lat, lng };
+    devUpdateBadge();
+    const line = $('devPosLine');
+    if (line) line.textContent = 'Virtual position: ' + lat.toFixed(6) + ', ' + lng.toFixed(6) +
+      (devMode.sim ? ' · simulating' : '');
+    if (deviceDot && mapObj) deviceDot.setLatLng([lat, lng]);
+    adoptDevicePos();
+    noteLegPosition(devicePos); // traffic learning: stationary detection
+    // Auto check-in against the virtual position (tests the 100m radius).
+    checkProximityCheckin(lat, lng, 5);
+  }
+  /* Real GPS fixes route through here so a background fix can't clobber an
+   * active override. Inactive: identical to a plain write.
+   * Also classifies location precision from the accuracy reading (Issue 2:
+   * iOS "Precise Location" toggle). accuracy in meters or null. */
+  function setDevicePosFromGps(p, accuracy) {
+    if (devMode.active && devMode.pos) return;
+    devicePos = p;
+    if (accuracy !== undefined) {
+      updateLocationPrecision(accuracy);
+    }
+  }
+  /* Classify precision and show/hide the approximate-location banner.
+   * Non-blocking: the app works fine on approximate fixes, just warns. */
+  var precisionBannerShown = false;
+  function updateLocationPrecision(accuracy) {
+    var cls = RouteCore.classifyPrecision(accuracy);
+    if (cls === 'unknown') return; // no reading — don't change state
+    state.locationPrecision = cls;
+    var banner = $('precisionBanner');
+    if (cls === 'approximate') {
+      if (banner) {
+        banner.hidden = false;
+        // Only toast once per session to avoid nagging.
+        if (!precisionBannerShown) {
+          precisionBannerShown = true;
+          toast('Approximate location — enable Precise Location for best routing');
+        }
+      }
+    } else if (banner) {
+      banner.hidden = true;
+    }
+  }
+  /* Dev-aware check-in: with an override active, real fixes are swapped for
+   * the virtual position so auto check-in tests simulated data. Inactive:
+   * behaves exactly like the original callback. */
+  function checkinAtGps(pos) {
+    if (devMode.active && devMode.pos) checkProximityCheckin(devMode.pos.lat, devMode.pos.lng, 5);
+    else checkProximityCheckin(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+  }
+  /* Remaining stops in the current route's stop order. */
+  function devSimWaypoints() {
+    return state.stops
+      .filter((s) => !s.done && s.lat != null && s.lng != null)
+      .map((s) => ({ lat: s.lat, lng: s.lng }));
+  }
+  /* Step `stepM` meters from `from` toward `to`; snap if within reach. */
+  function devMoveToward(from, to, stepM) {
+    const d = haversineM(from.lat, from.lng, to.lat, to.lng);
+    if (d <= stepM) return { lat: to.lat, lng: to.lng, arrived: true };
+    const R = 6371000, toRad = (x) => x * Math.PI / 180, toDeg = (x) => x * 180 / Math.PI;
+    const x = toRad(to.lat - from.lat);
+    const y = toRad(to.lng - from.lng) * Math.cos(toRad((from.lat + to.lat) / 2));
+    const len = Math.sqrt(x * x + y * y) || 1;
+    return {
+      lat: from.lat + toDeg((x / len) * (stepM / R)),
+      lng: from.lng + toDeg((y / len) * (stepM / R) / Math.cos(toRad(from.lat))),
+      arrived: false,
+    };
+  }
+  function devSimTick() {
+    if (!devMode.sim || !devMode.pos) return;
+    const mult = parseFloat($('devSpeed').value) || 10;
+    const wp = devMode.simWaypoints[devMode.simIdx];
+    if (!wp) { devSimStop('Simulation complete'); return; }
+    const next = devMoveToward(devMode.pos, wp, DEV_WALK_MPS * mult);
+    devSetPos(next.lat, next.lng);
+    if (next.arrived) devMode.simIdx++;
+    if (devMode.simIdx >= devMode.simWaypoints.length) { devSimStop('Simulation complete'); return; }
+    const s = $('devSimStatus');
+    if (s) s.textContent = 'Simulating ' + mult + '× — heading to stop ' +
+      (devMode.simIdx + 1) + ' of ' + devMode.simWaypoints.length;
+  }
+  function devSimStart() {
+    if (!devMode.active || devMode.sim) return;
+    // No override yet? Promote the current (real) position to virtual first.
+    if (!devMode.pos) {
+      if (!devicePos) { toast('No position yet — set one manually first'); return; }
+      devMode.pos = { lat: devicePos.lat, lng: devicePos.lng };
+    }
+    const wps = devSimWaypoints();
+    if (!wps.length) { toast('No remaining stops to simulate'); return; }
+    devMode.simWaypoints = wps; devMode.simIdx = 0; devMode.sim = true;
+    devMode.simTimer = setInterval(devSimTick, 1000);
+    devSetPos(devMode.pos.lat, devMode.pos.lng);
+    const s = $('devSimStatus');
+    if (s) s.textContent = 'Simulating…';
+  }
+  function devSimStop(msg) {
+    devMode.sim = false;
+    if (devMode.simTimer) { clearInterval(devMode.simTimer); devMode.simTimer = null; }
+    const s = $('devSimStatus');
+    if (s) s.textContent = msg || 'Simulation stopped';
+    if (msg) toast(msg);
+    // Redraw the route line from the final virtual position.
+    if (mapObj && $('mapWrap') && !$('mapWrap').hidden) refreshMap();
+  }
+  /* Clear the override and hand control back to real GPS. Dev mode stays
+   * enabled (badge drops back to plain "DEV") so another position can be
+   * set without re-tapping. */
+  function devClear() {
+    devSimStop('');
+    devMode.pos = null;
+    devUpdateBadge();
+    devicePos = null; // drop the virtual fix; a fresh real one lands below
+    ensureDevicePos().then((p) => {
+      if (p && deviceDot && mapObj) deviceDot.setLatLng([p.lat, p.lng]);
+      adoptDevicePos();
+      if (mapObj && !$('mapWrap').hidden) refreshMap();
+    });
+    const line = $('devPosLine');
+    if (line) line.textContent = 'Virtual position: —';
+    if ($('devLat')) $('devLat').value = '';
+    if ($('devLng')) $('devLng').value = '';
+    toast('Override cleared — real GPS restored');
+  }
+  function devExit() {
+    devSimStop('');
+    devMode.pos = null;
+    devMode.active = false;
+    devUpdateBadge();
+    devicePos = null;
+    ensureDevicePos().then((p) => {
+      if (p && deviceDot && mapObj) deviceDot.setLatLng([p.lat, p.lng]);
+      adoptDevicePos();
+      if (mapObj && !$('mapWrap').hidden) refreshMap();
+    });
+    $('devSheet').hidden = true;
+    toast('Dev mode off — real GPS restored');
+  }
+  function openDevSheet() {
+    devMode.active = true;
+    devUpdateBadge();
+    const line = $('devPosLine');
+    if (line) line.textContent = devMode.pos
+      ? 'Virtual position: ' + devMode.pos.lat.toFixed(6) + ', ' + devMode.pos.lng.toFixed(6)
+      : 'Virtual position: —';
+    $('devSheet').hidden = false;
+  }
+  function wireDevMode() {
+    // Hidden activation: 5 rapid taps on the header brand. No feedback per
+    // tap — undiscoverable in normal use. Plain taps are no-ops otherwise.
+    const brand = document.querySelector('#topbar .brand');
+    if (brand) brand.addEventListener('click', () => {
+      const now = Date.now();
+      while (devTapTimes.length && now - devTapTimes[0] > DEV_TAP_WINDOW_MS) devTapTimes.shift();
+      devTapTimes.push(now);
+      if (devTapTimes.length >= DEV_TAPS_NEEDED) { devTapTimes.length = 0; openDevSheet(); }
+    });
+    $('devClose').onclick = () => { $('devSheet').hidden = true; };
+    $('devSetPos').onclick = () => {
+      const lat = parseFloat($('devLat').value), lng = parseFloat($('devLng').value);
+      if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        toast('Enter a valid lat/lng'); return;
+      }
+      devSimStop(''); // a manual set cancels a running simulation
+      devSetPos(lat, lng);
+      if (mapObj && !$('mapWrap').hidden) refreshMap();
+      toast('Virtual position set');
+    };
+    $('devClear').onclick = devClear;
+    $('devSimStart').onclick = devSimStart;
+    $('devSimStop').onclick = () => devSimStop('Simulation stopped');
+    $('devExit').onclick = devExit;
+  }
+  wireDevMode();
+
   /* ---------- traffic learning: actual vs predicted drive times ----------
    * Tracks each drive leg (stop completion -> next check-in). If the device
    * sits stationary 5+ min mid-leg (gas station, restroom), the leg is
    * discarded — it doesn't reflect traffic. Clean legs feed a per-area,
    * per-time-of-day model that sharpens future estimates. */
   let legTrack = null; // {departAt, fromLat, fromLng, toLat, toLng, freeFlowMin, stationaryMs, lastPos, lastMoveAt}
-  const STATIONARY_SPEED_MS = 1.0; // ~2.2 mph — below this counts as stopped
   const STATIONARY_DISCARD_MS = 5 * 60 * 1000; // 5 min stopped mid-leg -> discard
 
   function loadTrafficLearn() {
@@ -964,23 +1482,34 @@
       if (!raw) return { buckets: {} };
       const d = JSON.parse(raw);
       return d && d.buckets ? d : { buckets: {} };
-    } catch (e) { return { buckets: {} }; }
+    } catch { return { buckets: {} }; }
   }
   function saveTrafficLearn(d) {
-    try { localStorage.setItem(LS_TRAFFIC, JSON.stringify(d)); } catch (e) {}
+    try { localStorage.setItem(LS_TRAFFIC, JSON.stringify(d)); } catch {}
   }
   /* ---------- weather: rain impact on drive times ---------- */
   let weatherCache = null; // {precipMm, fetchedAt}
   const WEATHER_TTL_MS = 15 * 60 * 1000; // refresh every 15 min
   async function fetchWeather() {
     try {
-      const lat = devicePos ? devicePos.lat : (state.origin.lat != null ? state.origin.lat : 36.16);
-      const lng = devicePos ? devicePos.lng : (state.origin.lng != null ? state.origin.lng : -86.78);
+      // Location priority: live GPS > route origin > home location.
+      // No hardcoded city fallback — if none available, skip (assume dry).
+      const hl = settings.homeLocation;
+      const lat = devicePos ? devicePos.lat
+        : (state.origin.lat != null ? state.origin.lat
+        : (hl && typeof hl.lat === 'number' ? hl.lat : null));
+      const lng = devicePos ? devicePos.lng
+        : (state.origin.lng != null ? state.origin.lng
+        : (hl && typeof hl.lng === 'number' ? hl.lng : null));
+      if (lat == null || lng == null) {
+        weatherCache = { precipMm: 0, fetchedAt: Date.now() };
+        return weatherCache;
+      }
       const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(2)}&longitude=${lng.toFixed(2)}&current=precipitation&timezone=auto`;
       const r = await fetchJson(url, {}, 8000);
       const precip = r && r.current && typeof r.current.precipitation === 'number' ? r.current.precipitation : 0;
       weatherCache = { precipMm: precip, fetchedAt: Date.now() };
-    } catch (e) {
+    } catch {
       // weather unavailable — assume dry (factor 1.0)
       weatherCache = { precipMm: 0, fetchedAt: Date.now() };
     }
@@ -1124,7 +1653,7 @@
         s.lat = p.lat; s.lng = p.lng; s.geocodeSource = 'zip-approx'; s.approx = true;
         return true;
       }
-    } catch (e) { /* fall through — stays unlocated */ }
+    } catch { /* fall through — stays unlocated */ }
     return false;
   }
 
@@ -1142,13 +1671,36 @@
 
   async function ensureGeocoded(statusFn, opts) {
     const o = opts || {};
-    // origin
-    if (state.origin.type === 'gps' && state.origin.lat == null && !o.skipGps) {
-      statusFn('Getting your location…');
-      const g = await getGps();
-      if (g) { state.origin.lat = g.lat; state.origin.lng = g.lng; }
-      else { state.origin.label = 'Current location (GPS unavailable)'; }
-    } else if (state.origin.type === 'address' && state.origin.lat == null) {
+    // Start (spec §1): tripStart wins; else fall back to legacy origin/GPS.
+    // If neither is available, skip silently — route starts at first stop.
+    const startEp = RouteCore.normalizeEndpoint(state.tripStart);
+    if (startEp && startEp.lat != null) {
+      state.origin = { type: 'address', label: startEp.label, lat: startEp.lat, lng: startEp.lng };
+    } else if (startEp && startEp.lat == null && startEp.label) {
+      statusFn('Locating start address…');
+      const tmp = { street: startEp.label };
+      if (await geocodeCensusOne(tmp).catch(() => false)) {
+        state.origin = { type: 'address', label: startEp.label, lat: tmp.lat, lng: tmp.lng };
+        state.tripStart = { label: startEp.label, lat: tmp.lat, lng: tmp.lng };
+      } else if (await geocodeNominatim(tmp).catch(() => false)) {
+        state.origin = { type: 'address', label: startEp.label, lat: tmp.lat, lng: tmp.lng };
+        state.tripStart = { label: startEp.label, lat: tmp.lat, lng: tmp.lng };
+      } else {
+        // Unlocatable start: clear it so optimize skips silently.
+        state.tripStart = null;
+        state.origin = { type: 'gps', label: 'Current location', lat: null, lng: null };
+      }
+    } else if (!startEp) {
+      // No explicit start: try GPS (existing behavior), else skip silently.
+      if (state.origin.type === 'gps' && state.origin.lat == null && !o.skipGps) {
+        statusFn('Getting your location…');
+        const g = await getGps();
+        if (g) { state.origin.lat = g.lat; state.origin.lng = g.lng; }
+        // else: leave null — optimize skips the origin silently.
+      }
+    }
+    // origin (legacy path when tripStart wasn't set and origin has an address)
+    if (!startEp && state.origin.type === 'address' && state.origin.lat == null) {
       statusFn('Locating start address…');
       const tmp = { street: state.origin.label };
       if (await geocodeCensusOne(tmp).catch(() => false)) {
@@ -1160,7 +1712,7 @@
           if (await geocodeArcGIS(tmp)) {
             state.origin.lat = tmp.lat; state.origin.lng = tmp.lng;
           }
-        } catch (e) {}
+        } catch {}
       }
     }
     // stops: Census batch -> ArcGIS -> Nominatim -> suffix retry -> ZIP area
@@ -1168,15 +1720,15 @@
     if (missing.length) {
       statusFn('Locating ' + missing.length + ' address' +
         (missing.length === 1 ? '' : 'es') + '…');
-      try { await geocodeCensusBatch(missing); } catch (e) { /* fall through */ }
+      try { await geocodeCensusBatch(missing); } catch { /* fall through */ }
       let still = missing.filter((s) => s.lat == null);
       for (const s of still) {
-        try { await geocodeArcGIS(s); } catch (e) {}
+        try { await geocodeArcGIS(s); } catch {}
         await sleep(400);
       }
       still = missing.filter((s) => s.lat == null);
       for (const s of still) {
-        try { await geocodeNominatim(s); } catch (e) {}
+        try { await geocodeNominatim(s); } catch {}
         await sleep(1100); // nominatim politeness
       }
       still = missing.filter((s) => s.lat == null);
@@ -1184,7 +1736,7 @@
         const expanded = RouteCore.expandStreetSuffix(s.street || '');
         if (expanded && expanded !== s.street) {
           const q = [expanded, s.city, s.state, s.zip].filter(Boolean).join(', ');
-          try { await geocodeArcGIS(s, q); } catch (e) {}
+          try { await geocodeArcGIS(s, q); } catch {}
           await sleep(400);
         }
       }
@@ -1219,7 +1771,7 @@
       markDirty(); // recompute rough estimate + re-render
       // auto-show the map preview once, so pins are visible pre-optimization
       if ($('mapWrap').hidden && state.stops.some((s) => s.lat != null)) {
-        try { await showMap(); } catch (e) { /* map needs a connection */ }
+        try { await showMap(); } catch { /* map needs a connection */ }
       } else {
         render();
       }
@@ -1242,7 +1794,7 @@
     try {
       if (geocodeInflight) {
         setStatus('Finishing locating addresses…');
-        try { await geocodeInflight; } catch (e) {}
+        try { await geocodeInflight; } catch {}
       }
       await ensureGeocoded(setStatus);
       // Done stops stay visible for history but leave the active route.
@@ -1275,10 +1827,11 @@
       const lastStop = active.find((s) => s.isLast && s.lat != null);
       let lastIdx = lastStop ? points.findIndex((p) => p._stopId === lastStop.id) : null;
       if (returnPt) lastIdx = points.length - 1; // the return always comes last
-      // default end address: pinned final destination after the last stop
-      // (e.g. home — the last appointment is "bossed up" so you head home after)
+      // End address: pinned final destination after the last stop.
+      // tripEnd wins; legacy settings.defaultEnd as fallback. Skipped silently if unset.
       let endPt = null;
-      if (settings.defaultEnd && !returnPt) {
+      const tripEndSet = !!RouteCore.normalizeEndpoint(state.tripEnd);
+      if ((tripEndSet || settings.defaultEnd) && !returnPt) {
         const ec = await getEndCoords();
         if (ec) {
           endPt = { lat: ec.lat, lng: ec.lng, _stopId: '__end' };
@@ -1425,7 +1978,7 @@
             const s = pid ? byStopId[pid] : null;
             if (s) names.push(stopLabel(s));
           });
-        } catch (e) {}
+        } catch {}
         $('reoptText').textContent = names.length
           ? `You're running behind on ${names.join(' · ')} — reordering stops could get you there on time.`
           : `You're running behind on a confirmed appointment — reordering stops could get you there on time.`;
@@ -1521,9 +2074,9 @@
    * app is opened/reopened after 15+ minutes, or the user interacts after
    * 15+ minutes idle. Pulls fresh drive times and re-optimizes around
    * confirmed windows — automatic and seamless. */
-  let autoTimer = null, autoInFlight = false, lastAutoOptAt = 0, lastAutoReason = null;
+  let autoTimer = null, autoInFlight = false, lastAutoReason = null;
   let lastOptAt = 0; // last optimize of any kind (manual or auto) — anti-spam baseline
-  let lastInteractionAt = Date.now(), hiddenAt = 0;
+  let lastInteractionAt = Date.now();
   const AUTO_IDLE_MS = 15 * 60 * 1000;
   function confirmedWindowed() {
     return state.stops.filter((s) => s.confirmed && s.twStart != null && s.twEnd != null &&
@@ -1554,7 +2107,6 @@
       lastAutoReason = reason; // so doOptimize knows whether to surface suggestions
       doOptimize(true).catch(() => {}).finally(() => {
         autoInFlight = false;
-        lastAutoOptAt = Date.now();
         lastAutoReason = null;
       });
     }, immediate ? 1500 : 2500);
@@ -1586,10 +2138,10 @@
         stops: state.stops.map((s) => ({ label: stopLabel(s), jobType: s.jobType })),
       });
       localStorage.setItem(LS_HIST, JSON.stringify(h.slice(0, 30)));
-    } catch (e) {}
+    } catch {}
   }
 
-  /* ---------- traffic data export/import (anonymized) ---------- */
+  /* ---------- traffic model import/export ---------- */
   const LS_TRAFFIC_MODEL = 'rr.traffic.model.v1'; // imported aggregated model
   function exportTrafficData() {
     try {
@@ -1597,25 +2149,19 @@
       const buckets = learn.buckets || {};
       const keys = Object.keys(buckets);
       if (!keys.length) {
-        $('trafficStatus').textContent = 'No traffic data yet — drive some routes first.';
+        $('trafficStatus').textContent = 'No traffic data to export.';
         return;
       }
-      // Export is already anonymized: coarse bucket keys + aggregated ratios.
-      // No addresses, no precise coordinates, no timestamps.
-      const out = {
-        exported_at: new Date().toISOString().slice(0, 10), // date only, no time
-        buckets: buckets,
-      };
-      const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+      const text = JSON.stringify({ buckets }, null, 2);
+      const blob = new Blob([text], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'traffic-samples-' + out.exported_at + '.json';
+      a.href = url;
+      a.download = 'routerunner-traffic-' + Date.now() + '.json';
       a.click();
-      URL.revokeObjectURL(a.href);
-      const total = keys.reduce((s, k) => s + (buckets[k].n || 0), 0);
-      $('trafficStatus').textContent =
-        `Exported ${keys.length} buckets, ${total} drives. Upload to data/samples/ in the traffic repo.`;
-    } catch (e) {
+      URL.revokeObjectURL(url);
+      $('trafficStatus').textContent = `Exported ${keys.length} buckets.`;
+    } catch {
       $('trafficStatus').textContent = 'Export failed.';
     }
   }
@@ -1629,7 +2175,7 @@
         const n = Object.keys(model.buckets).length;
         $('trafficStatus').textContent = `Imported model with ${n} buckets.`;
         toast('Traffic model updated');
-      } catch (e) {
+      } catch {
         $('trafficStatus').textContent = 'Invalid model file.';
       }
     };
@@ -1639,7 +2185,7 @@
     try {
       const raw = localStorage.getItem(LS_TRAFFIC_MODEL);
       return raw ? JSON.parse(raw) : null;
-    } catch (e) { return null; }
+    } catch { return null; }
   }
 
   /* ---------- Google Maps ---------- */
@@ -1684,7 +2230,7 @@
     try {
       await navigator.clipboard.writeText(url);
       toast('🔗 App link copied — send it to anyone');
-    } catch (e) {
+    } catch {
       prompt('Copy the app link:', url);
     }
   };
@@ -1701,7 +2247,7 @@
         mode: settings.mode,
         defaultStart: settings.defaultStart || '',
         defaultEnd: settings.defaultEnd || '',
-        defaultStartCoords: (typeof startCoordsCache !== 'undefined' && startCoordsCache) ? { lat: +startCoordsCache.lat.toFixed(6), lng: +startCoordsCache.lng.toFixed(6) } : null,
+        defaultStartCoords: null, /* startCoordsCache was removed; always null */
         defaultEndCoords: (typeof endCoordsCache !== 'undefined' && endCoordsCache) ? { lat: +endCoordsCache.lat.toFixed(6), lng: +endCoordsCache.lng.toFixed(6) } : null,
         autoConfirmAll: !!settings.autoConfirmAll,
         returnToStart: !!settings.returnToStart,
@@ -1724,8 +2270,6 @@
       errors: (window.__rrErrors || []).slice(-20),
     };
     const text = JSON.stringify(diag, null, 2);
-    const fname = 'routerunner-diagnostics-' + Date.now() + '.json';
-    const file = new File([text], fname, { type: 'application/json' });
     // In the installed PWA there's no Safari downloader. Show a modal with
     // the JSON plus Copy and Share buttons — bulletproof on iOS.
     let modal = $('diagModal');
@@ -1754,7 +2298,7 @@
       try {
         await navigator.clipboard.writeText($('diagText').value);
         toast('Copied — paste it to Vesper');
-      } catch (e) {
+      } catch {
         $('diagText').select();
         toast('Select all and copy manually');
       }
@@ -1769,7 +2313,7 @@
         } else {
           toast('Sharing not available — use Copy');
         }
-      } catch (e) { /* dismissed */ }
+      } catch { /* dismissed */ }
     };
   };
   // Capture JS errors for diagnostics.
@@ -1797,7 +2341,7 @@
         ssDel('rr.updating'); ssDel('rr.updating_at');
         applyUpdate(info.version);
       }
-    } catch (e) {
+    } catch {
       toast('Could not check — are you online?');
     }
   };
@@ -1836,76 +2380,19 @@
     $('originSheet').hidden = true;
     markDirty('Start updated — using GPS');
   };
-  let originSearchTimer = null, originSearchToken = 0;
-  $('originSearchInput').addEventListener('input', (e) => {
-    clearTimeout(originSearchTimer);
-    const q = e.target.value.trim();
-    if (q.length < 4) { $('originSuggestList').hidden = true; return; }
-    originSearchTimer = setTimeout(() => searchOriginPhoton(q, ++originSearchToken), 350);
-  });
-  async function searchOriginPhoton(q, myToken) {
-    try {
-      const list = $('originSuggestList');
-      list.innerHTML = '';
-      const hasHouseNum = /^\d+\s+\S/.test(q);
-      const censusP = hasHouseNum
-        ? fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=' + encodeURIComponent(q + ', Nashville, TN'))
-            .then((r) => r.json()).catch(() => null)
-        : Promise.resolve(null);
-      const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
-        '&limit=6&lat=36.1627&lon=-86.7816').then((r) => r.json()).catch(() => null);
-      const [cj, j] = await Promise.all([censusP, photonP]);
-      if (myToken !== originSearchToken) return; // stale
-      list.innerHTML = '';
-      const nm = cj && cj[0];
-      if (nm && nm.address && nm.address.house_number) {
-        const a = nm.address;
-        const street = [(a.house_number || ''), (a.road || '')].filter(Boolean).join(' ');
-        const cleanAddr = [street, (a.city || a.town || a.village || 'Nashville')].filter(Boolean).join(', ');
-        const li = document.createElement('li');
-        li.innerHTML = '✓ <b>' + esc(cleanAddr) + '</b><small>Exact address match</small>';
-        li.onclick = () => {
-          state.origin = {
-            type: 'address',
-            label: cleanAddr,
-            lat: parseFloat(nm.lat), lng: parseFloat(nm.lon),
-          };
-          $('originSheet').hidden = true;
-          markDirty('Start updated');
-          toast('✓ Start updated');
-        };
-        list.appendChild(li);
-      }
-      (j && j.features || []).forEach((f) => {
-        const p = f.properties || {};
-        const label = [p.name, p.street, p.city, p.state, p.postcode].filter(Boolean)
-          .filter((v, i, a) => a.indexOf(v) === i).join(', ');
-        const li = document.createElement('li');
-        li.innerHTML = esc(label || 'Unnamed place') +
-          '<small>' + esc([p.city, p.state].filter(Boolean).join(', ')) + '</small>';
-        li.onclick = () => {
-          const [lng, lat] = f.geometry.coordinates;
-          // Preserve house number from query if Photon result lacks it.
-          const qNum = (q.match(/^\d+/) || [])[0] || '';
-          let oLabel = label;
-          if (qNum && !new RegExp('^' + qNum + '\\b').test(oLabel)) {
-            const qStreet = q.replace(/^\d+\s+/, '').toLowerCase();
-            if (oLabel.toLowerCase().includes(qStreet.split(' ')[0])) {
-              oLabel = qNum + ' ' + oLabel;
-            }
-          }
-          state.origin = { type: 'address', label: oLabel, lat, lng };
-          $('originSheet').hidden = true;
-          markDirty('Start updated');
-        };
-        list.appendChild(li);
-      });
-      list.hidden = !list.children.length;
-    } catch (e) { /* offline — suggestions unavailable */ }
+  /* Origin search: universal dropdown (saved locations first, then live search).
+   * onOriginPick replicates the legacy set-origin behavior. */
+  function onOriginPick(v) {
+    state.origin = {
+      type: 'address',
+      label: v.label || v.address || '',
+      lat: v.lat, lng: v.lng,
+    };
+    $('originSheet').hidden = true;
+    markDirty('Start updated');
+    toast('\u2713 Start updated');
   }
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('#originSearchWrap')) $('originSuggestList').hidden = true;
-  });
+  attachAddressDropdown('originSearchInput', 'originSuggestList', 'originSearchWrap', onOriginPick);
 
   /* ---------- map ---------- */
   let mapObj = null, leafletLoading = null;
@@ -1950,13 +2437,35 @@
         if (state.origin.type === 'gps' && state.origin.lat == null) await ensureDevicePos();
         adoptDevicePos();
         refreshMap();
-      } catch (e) { /* map draw failures must never break the app */ }
+        // No GPS and no stops: neutral continental-US view, never a
+        // hardcoded city. GPS is the source of truth — we don't guess.
+        if (!devicePos && !state.stops.some((s) => s.lat != null)) {
+          mapObj.setView([39.8, -98.5], 4);
+        }
+        updateLocationHint();
+      } catch { /* map draw failures must never break the app */ }
     }, 50);
   }
   $('mapToggle').onclick = async () => {
     const w = $('mapWrap');
     if (!w.hidden) { w.hidden = true; $('mapToggle').textContent = '🗺 Map'; return; }
-    try { await showMap(); } catch (e) { toast('Map needs a connection'); }
+    try { await showMap(); } catch { toast('Map needs a connection'); }
+  };
+  /* Subtle "enable location" hint on the map when GPS is unavailable.
+   * Non-blocking — the map still works, searches run unbiased. */
+  function updateLocationHint() {
+    const hint = $('locationHint');
+    if (!hint) return;
+    hint.hidden = !!devicePos;
+  }
+  $('locationHintRetry').onclick = async () => {
+    toast('Getting your location…');
+    devicePos = null; // force a fresh fix attempt
+    await ensureDevicePos();
+    adoptDevicePos();
+    updateLocationHint();
+    refreshMap();
+    if (devicePos) toast('✓ Location found');
   };
   function openMapForPin(stopId) {
     state.pinModeStopId = stopId;
@@ -2020,6 +2529,7 @@
     const boundPts = pts.map((p) => [p.lat, p.lng]);
     if (devicePos) boundPts.push([devicePos.lat, devicePos.lng]);
     if (boundPts.length) mapObj.fitBounds(L.latLngBounds(boundPts).pad(0.15));
+    updateLocationHint();
   }
 
   /* ---------- clear all / fresh start ---------- */
@@ -2058,7 +2568,7 @@
       if (r) localStorage.setItem('rr.route.backup', r);
       const s = localStorage.getItem(LS_SET);
       if (s) localStorage.setItem('rr.settings.backup', s);
-    } catch (e) {}
+    } catch {}
     try {
       toast('Checking for updates…');
       const resp = await fetch('version.json', { cache: 'no-store' });
@@ -2067,7 +2577,7 @@
         applyUpdate(info.version); // toasts, backs up again, reloads
         return;
       }
-    } catch (e) { /* offline or check failed — plain reload is still safe */ }
+    } catch { /* offline or check failed — plain reload is still safe */ }
     saveUIState();
     location.reload();
   };
@@ -2108,22 +2618,22 @@
     if (!isWorkMode() || !settings.autoCheckin) return;
     try {
       autoCheckinWatchId = navigator.geolocation.watchPosition((pos) => {
-        checkProximityCheckin(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+        checkinAtGps(pos);
       }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
       // Fallback: iOS suspends watchPosition when backgrounded. Poll every 60s
       // and check immediately when the app becomes visible.
       proximityIntervalId = setInterval(() => {
         if (!isWorkMode() || !settings.autoCheckin || state.checkedIn) return;
         navigator.geolocation.getCurrentPosition((pos) => {
-          checkProximityCheckin(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+          checkinAtGps(pos);
         }, () => {}, { enableHighAccuracy: true, maximumAge: 60000, timeout: 15000 });
       }, 60000);
-    } catch (e) {}
+    } catch {}
   }
   function stopAutoCheckinWatch() {
     if (proximityIntervalId != null) { clearInterval(proximityIntervalId); proximityIntervalId = null; }
     if (autoCheckinWatchId != null && 'geolocation' in navigator) {
-      try { navigator.geolocation.clearWatch(autoCheckinWatchId); } catch (e) {}
+      try { navigator.geolocation.clearWatch(autoCheckinWatchId); } catch {}
     }
     autoCheckinWatchId = null;
   }
@@ -2150,8 +2660,147 @@
     $('setMode').value = settings.mode || 'work';
     updateModeHint();
     renderServiceTimes();
+    renderHomeLocationSetting();
+    renderSavedLocations();
     $('settingsSheet').hidden = false;
   };
+  /* ---------- home location setting (Issue 1) ---------- */
+  function renderHomeLocationSetting() {
+    const hl = settings.homeLocation;
+    $('homeLocationDisplay').textContent = hl && hl.city
+      ? 'Current: ' + hl.city + (hl.state ? ', ' + hl.state : '')
+      : 'Not set — GPS is used when available.';
+    $('setHome').value = '';
+    $('setHome').placeholder = hl && hl.city
+      ? hl.city + (hl.state ? ', ' + hl.state : '')
+      : 'e.g. Austin, TX (optional override)';
+  }
+  /* ---------- saved locations settings UI (spec §2) ---------- */
+  function renderSavedLocations() {
+    const ul = $('savedList');
+    if (!ul) return;
+    ul.innerHTML = '';
+    if (!settings.savedLocations.length) {
+      ul.innerHTML = '<li class="fine">No saved locations yet. Tap ⭐ on any address to save it.</li>';
+      return;
+    }
+    settings.savedLocations.forEach((s) => {
+      const li = document.createElement('li');
+      li.className = 'saved-row';
+      li.innerHTML =
+        '<span class="saved-star">⭐</span>' +
+        '<div class="info"><div class="addr">' + esc(s.name) + '</div>' +
+        (s.address && s.address !== s.name ? '<div class="meta"><span class="chip">' + esc(s.address) + '</span></div>' : '') +
+        '</div>' +
+        '<div class="acts">' +
+          '<button data-sact="rename" title="Rename">✏️</button>' +
+          '<button data-sact="del" title="Remove">✕</button>' +
+        '</div>';
+      ul.appendChild(li);
+    });
+  }
+  // Delegate rename/delete clicks for the saved list.
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-sact]');
+    if (!btn) return;
+    const li = btn.closest('li.saved-row');
+    if (!li) return;
+    const nameEl = li.querySelector('.addr');
+    const name = nameEl ? nameEl.textContent : '';
+    const loc = settings.savedLocations.find((s) => s.name === name);
+    if (!loc) return;
+    const key = RouteCore.savedLocationKey(loc);
+    if (btn.dataset.sact === 'del') {
+      if (!confirm('Remove "' + loc.name + '" from saved locations?')) return;
+      const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
+      settings.savedLocations = r.saved;
+      save(); renderSavedLocations(); render();
+      toast('☆ Unsaved');
+    } else if (btn.dataset.sact === 'rename') {
+      const nn = prompt('Rename saved location:', loc.name);
+      if (nn === null) return;
+      settings.savedLocations = RouteCore.renameSavedLocation(settings.savedLocations, key, nn);
+      save(); renderSavedLocations(); render();
+      toast('Renamed');
+    }
+  });
+  let homeSuggestTimer = null, homeSuggestToken = 0;
+  $('setHome').addEventListener('input', (e) => {
+    clearTimeout(homeSuggestTimer);
+    const q = e.target.value.trim();
+    if (q.length < 2) { $('setHomeSuggest').hidden = true; return; }
+    homeSuggestTimer = setTimeout(() => searchHomeCity(q, ++homeSuggestToken, 'setHomeSuggest', 'setHome', (sel) => {
+      settings.homeLocation = sel;
+      save();
+      renderHomeLocationSetting();
+      toast('✓ Home location set to ' + sel.city + (sel.state ? ', ' + sel.state : ''));
+    }), 350);
+  });
+  /* City search via Photon: returns {city, state, lat, lng} candidates. */
+  async function searchHomeCity(q, myToken, listId, inputId, onPick) {
+    try {
+      const list = $(listId);
+      list.innerHTML = '';
+      const j = await fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) + '&limit=5')
+        .then((r) => r.json()).catch(() => null);
+      if (myToken !== homeSuggestToken) return;
+      list.innerHTML = '';
+      (j && j.features || []).forEach((f) => {
+        const p = f.properties || {};
+        const city = p.city || p.town || p.village || p.name || '';
+        const state = p.state || '';
+        if (!city) return;
+        const [lng, lat] = f.geometry.coordinates;
+        const label = city + (state ? ', ' + state : '');
+        const li = document.createElement('li');
+        li.innerHTML = '📍 <b>' + esc(label) + '</b>';
+        li.onclick = () => {
+          onPick({ city: city, state: state, lat: lat, lng: lng });
+          $(inputId).value = '';
+          list.hidden = true;
+        };
+        list.appendChild(li);
+      });
+      list.hidden = !list.children.length;
+    } catch { /* offline */ }
+  }
+  $('setHomeGps').onclick = async () => {
+    if (!('geolocation' in navigator)) { toast('GPS not available'); return; }
+    toast('Getting your location…');
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      try {
+        const lat = pos.coords.latitude.toFixed(4), lon = pos.coords.longitude.toFixed(4);
+        const r = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+          { headers: { 'Accept': 'application/json' } });
+        const j = r.ok ? await r.json() : null;
+        const a = j && j.address ? j.address : null;
+        if (a) {
+          const city = a.city || a.town || a.village || '';
+          const state = a.state_code || a.state || '';
+          if (city) {
+            settings.homeLocation = {
+              city: city, state: state,
+              lat: pos.coords.latitude, lng: pos.coords.longitude,
+            };
+            save();
+            renderHomeLocationSetting();
+            toast('✓ Home location set to ' + city + (state ? ', ' + state : ''));
+            return;
+          }
+        }
+        toast('Could not determine city from GPS');
+      } catch { toast('Could not determine city from GPS'); }
+    }, () => toast('GPS not available'), { timeout: 10000 });
+  };
+  $('setHomeClear').onclick = () => {
+    settings.homeLocation = null;
+    save();
+    renderHomeLocationSetting();
+    toast('Home location cleared');
+  };
+  /* ---------- precision banner (Issue 2) ---------- */
+  $('precisionBannerClose').onclick = () => { $('precisionBanner').hidden = true; };
   $('setStartGps').onclick = () => {
     // Capture current GPS position and reverse-geocode it into the field,
     // so "default start" becomes the office (or wherever you are now).
@@ -2175,11 +2824,152 @@
           if (addr) { $('setStart').value = addr; toast('Start address set to current location'); return; }
         }
         toast('Could not find address for this location');
-      } catch (e) { toast('Address lookup failed'); }
+      } catch { toast('Address lookup failed'); }
     }, () => toast('Location unavailable'), { timeout: 10000 });
   };
 
   /* Address autofill for the default start/end fields (Photon + Census exact match). */
+  /* ---------- universal address dropdown (spec §3) ----------
+   * attachAddressDropdown(inputEl, listEl, wrapEl, onSelect)
+   * - Empty + focus → shows saved locations (⭐ rows) first.
+   * - Typing (debounced 300ms) → live Photon + Nominatim results.
+   * - onSelect({label, street, city, state, zip, lat, lng}) on pick.
+   * - Keyboard: ↑/↓ navigate, Enter selects, Esc dismisses. */
+  function attachAddressDropdown(inputEl, listEl, wrapEl, onSelect) {
+    const input = typeof inputEl === 'string' ? $(inputEl) : inputEl;
+    const list = typeof listEl === 'string' ? $(listEl) : listEl;
+    const wrap = typeof wrapEl === 'string' ? $(wrapEl) : wrapEl;
+    if (!input || !list) return;
+    let timer = null, tok = 0, activeIdx = -1;
+
+    function close() { list.hidden = true; list.innerHTML = ''; activeIdx = -1; }
+    function highlight() {
+      const items = list.querySelectorAll('li[data-idx]');
+      items.forEach((li, i) => li.classList.toggle('active', i === activeIdx));
+      const act = items[activeIdx];
+      if (act) act.scrollIntoView({ block: 'nearest' });
+    }
+    function pick(idx) {
+      const li = list.querySelectorAll('li[data-idx]')[idx];
+      if (!li || !li._pick) return;
+      const v = li._pick;
+      close();
+      if (typeof onSelect === 'function') onSelect(v);
+    }
+
+    function renderSaved(filter) {
+      const matches = RouteCore.filterSavedLocations(settings.savedLocations, filter);
+      list.innerHTML = '';
+      activeIdx = -1;
+      if (!matches.length) { list.hidden = true; return; }
+      const head = document.createElement('li');
+      head.className = 'dd-head';
+      head.innerHTML = '⭐ Saved locations';
+      list.appendChild(head);
+      matches.forEach((s, i) => {
+        const li = document.createElement('li');
+        li.dataset.idx = i;
+        li.innerHTML = '⭐ <b>' + esc(s.name) + '</b><small>' + esc(s.address || '') + '</small>';
+        li._pick = {
+          label: s.name, address: s.address,
+          street: s.address || '', city: '', state: '', zip: '',
+          lat: s.lat, lng: s.lng, fromSaved: true,
+        };
+        li.onclick = () => pick(i);
+        list.appendChild(li);
+      });
+      list.hidden = false;
+    }
+
+    async function searchLive(q, myToken) {
+      try {
+        list.innerHTML = '';
+        const hasHouseNum = /^\d+\s+\S/.test(q);
+        const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
+          '&limit=6' + photonBiasParams()).then((r) => r.json()).catch(() => null);
+        const censusP = hasHouseNum
+          ? fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=' + encodeURIComponent(q + homeSuffix()))
+              .then((r) => r.json()).catch(() => null)
+          : Promise.resolve(null);
+        const [pj, cj] = await Promise.all([photonP, censusP]);
+        if (myToken !== tok) return; // stale
+        list.innerHTML = '';
+        activeIdx = -1;
+        let idx = 0;
+        const addRow = (html, pick) => {
+          const li = document.createElement('li');
+          li.dataset.idx = idx++;
+          li.innerHTML = html;
+          li._pick = pick;
+          li.onclick = () => pick(li.dataset.idx);
+          list.appendChild(li);
+        };
+        const nm = cj && cj[0];
+        if (nm && nm.address && nm.address.house_number) {
+          const a = nm.address;
+          const street = [(a.house_number || ''), (a.road || '')].filter(Boolean).join(' ');
+          const city = a.city || a.town || a.village || '';
+          const cleanAddr = [street, city, [a.state_code || a.state || '', a.postcode || ''].filter(Boolean).join(' ')]
+            .filter(Boolean).join(', ');
+          addRow('✓ <b>' + esc(cleanAddr) + '</b><small>Exact address match</small>', {
+            label: cleanAddr, street, city,
+            state: a.state_code || a.state || '', zip: a.postcode || '',
+            lat: parseFloat(nm.lat), lng: parseFloat(nm.lon),
+          });
+        }
+        (pj && pj.features || []).forEach((f) => {
+          const p = f.properties || {};
+          const label = [p.name, p.street, p.city, p.state, p.postcode].filter(Boolean)
+            .filter((v, i, a) => a.indexOf(v) === i).join(', ');
+          const qNum = (q.match(/^\d+/) || [])[0] || '';
+          let street = [p.housenumber, p.street].filter(Boolean).join(' ') ||
+                       [p.name, p.street].filter(Boolean).join(' ') || label;
+          if (qNum && street && !new RegExp('^' + qNum + '\\b').test(street)) {
+            const qStreet = q.replace(/^\d+\s+/, '').toLowerCase();
+            if (street.toLowerCase().includes(qStreet.split(' ')[0])) {
+              street = qNum + ' ' + street;
+            }
+          }
+          const addr = [street, p.city, [p.state, p.postcode].filter(Boolean).join(' ')]
+            .filter(Boolean).join(', ');
+          const coords = f.geometry && f.geometry.coordinates;
+          addRow(esc(label || 'Unnamed place') +
+            '<small>' + esc([p.city, p.state].filter(Boolean).join(', ')) + '</small>', {
+            label: addr || label, street,
+            city: p.city || '', state: p.state || '', zip: p.postcode || '',
+            lat: coords ? coords[1] : null, lng: coords ? coords[0] : null,
+          });
+        });
+        list.hidden = !list.children.length;
+      } catch { /* offline — suggestions unavailable */ }
+    }
+
+    input.addEventListener('focus', () => {
+      if (!input.value.trim()) renderSaved('');
+    });
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      const q = input.value.trim();
+      if (!q) { renderSaved(''); return; }
+      const myToken = ++tok;
+      timer = setTimeout(() => searchLive(q, myToken), 300);
+    });
+    input.addEventListener('keydown', (e) => {
+      const items = list.querySelectorAll('li[data-idx]');
+      if (list.hidden || !items.length) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = (activeIdx + 1) % items.length; highlight(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = (activeIdx - 1 + items.length) % items.length; highlight(); }
+      else if (e.key === 'Enter') { if (activeIdx >= 0) { e.preventDefault(); pick(activeIdx); } }
+      else if (e.key === 'Escape') { close(); }
+    });
+    document.addEventListener('click', (e) => {
+      if (wrap && !e.target.closest('#' + (wrap.id || '')) && e.target !== input) close();
+      else if (!wrap && !input.contains(e.target) && !list.contains(e.target)) close();
+    });
+    // Expose a close handle for programmatic dismissal.
+    input._ddClose = close;
+  }
+
   function wireSettingsAutocomplete(inputId, listId, wrapId) {
     let timer = null, tok = 0;
     $(inputId).addEventListener('input', (e) => {
@@ -2202,9 +2992,9 @@
             list.appendChild(censusLi);
           }
           const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
-            '&limit=6&lat=36.1627&lon=-86.7816').then((r) => r.json()).catch(() => null);
+            '&limit=6' + photonBiasParams()).then((r) => r.json()).catch(() => null);
           const censusP = hasHouseNum
-            ? fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=' + encodeURIComponent(q + ', Nashville, TN'))
+            ? fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=' + encodeURIComponent(q + homeSuffix()))
                 .then((r) => r.json()).catch(() => null)
             : Promise.resolve(null);
           const [pj, cj] = await Promise.all([photonP, censusP]);
@@ -2216,7 +3006,7 @@
           if (nm && nm.address && nm.address.house_number) {
             const a = nm.address;
             const street = [(a.house_number || ''), (a.road || '')].filter(Boolean).join(' ');
-            const cleanAddr = [street, (a.city || a.town || a.village || 'Nashville'), 'TN ' + (a.postcode || '')].filter(Boolean).join(', ');
+            const cleanAddr = [street, (a.city || a.town || a.village || ((settings.homeLocation && settings.homeLocation.city) || '')), 'TN ' + (a.postcode || '')].filter(Boolean).join(', ');
             const li = document.createElement('li');
             li.innerHTML = '✓ <b>' + esc(cleanAddr) + '</b><small>Exact address match</small>';
             li.onclick = () => {
@@ -2255,7 +3045,7 @@
             list.appendChild(li);
           });
           list.hidden = !list.children.length;
-        } catch (e) { /* offline — suggestions unavailable */ }
+        } catch { /* offline — suggestions unavailable */ }
       }, 350);
     });
     document.addEventListener('click', (e) => {
@@ -2287,14 +3077,14 @@
           if (addr) { $('setEnd').value = addr; toast('End address set to current location'); return; }
         }
         toast('Could not find address for this location');
-      } catch (e) { toast('Address lookup failed'); }
+      } catch { toast('Address lookup failed'); }
     }, () => toast('Location unavailable'), { timeout: 10000 });
   };
   function updateModeHint() {
     const h = $('modeHint');
     if (h) h.textContent = isWorkMode()
-      ? 'Work mode: confirmed windows, check-in, notes, job types.'
-      : 'Personal mode: just stops — first/last pins stay, work features hide.';
+      ? 'Work profile: confirmed windows, check-in, notes, job types.'
+      : 'Personal profile: just stops — first/last pins stay, work features hide.';
     const acr = $('setAutoCheckinRow');
     if (acr) acr.style.display = isWorkMode() ? '' : 'none';
     const acfr = $('setAutoConfirmRow');
@@ -2305,7 +3095,7 @@
     save(); updateModeHint(); renderServiceTimes(); render();
     if (settings.mode === 'personal') stopAutoCheckinWatch();
     else if (settings.autoCheckin) startAutoCheckinWatch();
-    toast(settings.mode === 'personal' ? 'Personal mode — work features hidden' : 'Work mode');
+    toast(settings.mode === 'personal' ? 'Personal profile — work features hidden' : 'Work profile');
   });
   $('settingsClose').onclick = () => {
     const retBefore = settings.returnToStart;
@@ -2434,7 +3224,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261002-203451' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261004-034835' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
@@ -2442,7 +3232,7 @@
       u.searchParams.set('v', APP_VERSION);
       location.replace(u.toString());
     }
-  } catch (e) {}
+  } catch {}
   const UI_KEY = 'rr.ui.v1';
   function saveUIState() {
     try {
@@ -2452,11 +3242,11 @@
         settingsOpen: !$('settingsSheet').hidden,
         draft: $('searchInput') ? $('searchInput').value : '',
       }));
-    } catch (e) { /* storage unavailable — restore just skips */ }
+    } catch { /* storage unavailable — restore just skips */ }
   }
   function restoreUIState() {
     let ui = null;
-    try { ui = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); } catch (e) {}
+    try { ui = JSON.parse(localStorage.getItem(UI_KEY) || 'null'); } catch {}
     if (!ui) return;
     if (ui.draft && $('searchInput')) $('searchInput').value = ui.draft;
     if (ui.mapOpen && $('mapWrap').hidden) showMap().catch(() => {});
@@ -2464,9 +3254,9 @@
     if (ui.y) window.scrollTo(0, ui.y);
   }
   let lastUpdateCheck = 0;
-  function ssGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
-  function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} }
-  function ssDel(k) { try { sessionStorage.removeItem(k); } catch (e) {} }
+  function ssGet(k) { try { return sessionStorage.getItem(k); } catch { return null; } }
+  function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch {} }
+  function ssDel(k) { try { sessionStorage.removeItem(k); } catch {} }
   function checkForUpdate() {
     const now = Date.now();
     if (now - lastUpdateCheck < 30000) return; // throttle foreground checks
@@ -2500,7 +3290,7 @@
       if (route) localStorage.setItem('rr.route.backup', route);
       const set = localStorage.getItem(LS_SET);
       if (set) localStorage.setItem('rr.settings.backup', set);
-    } catch (e) {}
+    } catch {}
     saveUIState();
     toast('Updating to the latest version…');
     let done = false;
@@ -2510,7 +3300,7 @@
         const u = new URL(location.href);
         u.searchParams.set('v', serverVersion);
         location.href = u.toString();
-      } catch (e) { location.reload(); }
+      } catch { location.reload(); }
     };
     // The old SW serves stale cached files on plain reload. Unregister all
     // workers first, then cache-bust — guarantees the new shell loads.
@@ -2522,7 +3312,7 @@
         : Promise.resolve();
       Promise.resolve(unreg).then(cacheBust).catch(cacheBust);
       setTimeout(cacheBust, 4000); // backstop if unregistration stalls
-    } catch (e) {
+    } catch {
       cacheBust();
     }
   }
@@ -2530,14 +3320,14 @@
   /* ---------- boot ---------- */
   load();
   if (!loadSharedRoute()) render();
-  try { const av = $('appVer'); if (av) av.textContent = APP_VERSION; } catch (e) {}
+  try { const av = $('appVer'); if (av) av.textContent = APP_VERSION; } catch {}
   try {
     const u = new URL(location.href);
     if (u.searchParams.has('v')) {
       u.searchParams.delete('v');
       history.replaceState(null, '', u.pathname + u.search + u.hash);
     }
-  } catch (e) {}
+  } catch {}
   restoreUIState();
   checkForUpdate();
   // Resume auto check-in watch if it was on (work mode only).
@@ -2550,7 +3340,7 @@
     ensureDevicePos().then(adoptDevicePos);
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { hiddenAt = Date.now(); saveUIState(); }
+    if (document.hidden) { saveUIState(); }
     else {
       // auto-delete check: a route completed yesterday is wiped on return
       if (state.completedAt && !isSameDay(state.completedAt, Date.now()) &&
@@ -2566,7 +3356,7 @@
       // so check immediately when the app becomes visible.
       if (isWorkMode() && settings.autoCheckin && !state.checkedIn && 'geolocation' in navigator) {
         navigator.geolocation.getCurrentPosition((pos) => {
-          checkProximityCheckin(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+          checkinAtGps(pos);
         }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
       }
     } // reopened: fresh times + re-route

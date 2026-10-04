@@ -108,11 +108,6 @@ function hasLockIndicator(s) {
 }
 
 /* Stop number: "3.", "3)", "Stop 3", "3 of 14" — returns the number or null */
-function parseStopNumber(s) {
-  var m = String(s).match(/^(?:Stop\s+)?(\d{1,2})(?:\s*[.)]|\s+of\s+\d+)/i);
-  return m ? parseInt(m[1], 10) : null;
-}
-
 /* Freeform address extractor for screenshots of notes, GPS apps, etc.
  * Finds street addresses anywhere in the text, not just schedule format.
  * Returns [{street, city, state, zip}] — no job types, times, or names. */
@@ -534,6 +529,50 @@ var LEARN_PRIOR_WEIGHT = 5;
 var LEARN_MIN_SAMPLES = 3;
 var LEARN_AGG_MIN_SAMPLES = 5;
 var LEARN_MAX_SAMPLES = 50; /* exponential decay beyond this */
+
+/* ---------- user home location (optional override, never required) ----------
+ * homeLocation: {city, state, lat, lng} | null
+ * Stored in settings.homeLocation. An OPTIONAL manual override for users who
+ * want to plan routes for a different area than where they are. GPS is the
+ * primary source of truth — this is only consulted when set AND no GPS fix
+ * is available. Never prompted, never defaulted. */
+
+/* Geocode query suffix: ", City, ST" when home is set, "" otherwise.
+ * Never silently defaults to any city — the geocoder resolves bare queries. */
+function geocodeSuffix(homeLocation) {
+  if (!homeLocation || typeof homeLocation !== 'object') return '';
+  var city = (homeLocation.city || '').trim();
+  var st = (homeLocation.state || '').trim();
+  if (!city) return '';
+  return ', ' + city + (st ? ', ' + st : '');
+}
+
+/* Photon search bias coords: {lat, lon} from home, or null to omit bias.
+ * Never returns hardcoded coordinates for a city the user didn't choose. */
+function photonBias(homeLocation) {
+  if (!homeLocation || typeof homeLocation !== 'object') return null;
+  var lat = homeLocation.lat, lng = homeLocation.lng;
+  if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+  if (!isFinite(lat) || !isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat: lat, lon: lng };
+}
+
+/* ---------- location precision (iOS "Precise Location" toggle) ----------
+ * When precise location is off, iOS gives the browser a fuzzed fix
+ * (~1-3 km accuracy). We warn but don't block. */
+
+/* Accuracy threshold in meters: above this, the fix is "approximate". */
+var PRECISE_ACCURACY_M = 100;
+
+/* Classify a geolocation accuracy reading.
+ * Returns 'precise' | 'approximate' | 'unknown' (null/undefined/invalid). */
+function classifyPrecision(accuracy) {
+  if (accuracy == null || typeof accuracy !== 'number' || !isFinite(accuracy) || accuracy < 0) {
+    return 'unknown';
+  }
+  return accuracy <= PRECISE_ACCURACY_M ? 'precise' : 'approximate';
+}
 /* Hierarchical fallback:
  * 1. Specific (time, day, area) bucket with 3+ samples
  * 2. (time, day) aggregate across all areas with 5+ samples
@@ -639,7 +678,6 @@ var EARLY_MIN_SAVE = 15;  /* only suggest when saving 15+ min of driving */
 function findEarlyArrivalOpportunity(order, durMin, ctx) {
   var c = ctx || {};
   var windows = c.windows || [];
-  var bufferMin = (c.bufferMin !== null && c.bufferMin !== undefined) ? c.bufferMin : WINDOW_BUFFER_MIN;
   var ord = order || [];
   if (ord.length < 3) return null; /* need origin + at least 2 stops */
 
@@ -925,7 +963,7 @@ function optimizeOrder(matrix, opts) {
   var improved = true;
   while (improved) {
     improved = false;
-    for (var i = lo; i < endExclusive - 1 && !improved; i++) {
+    for (i = lo; i < endExclusive - 1 && !improved; i++) {
       for (var j = i + 1; j < endExclusive; j++) {
         var cand = order.slice();
         for (var a = i, b = j; a < b; a++, b--) {
@@ -1060,7 +1098,7 @@ function parseArcGisCandidates(json) {
     var lat = Number(best.location.y), lng = Number(best.location.x);
     if (!isFinite(lat) || !isFinite(lng)) return null;
     return { lat: lat, lng: lng, score: best.score, address: best.address || '' };
-  } catch (e) {
+  } catch {
     return null;
   }
 }
@@ -1212,9 +1250,125 @@ function decodeShare(str) {
     else if (s.indexOf('#r=') === 0) s = s.slice(3);
     if (!/^[A-Za-z0-9\-_]+$/.test(s)) return null;
     return JSON.parse(b64urlDecode(s));
-  } catch (e) {
+  } catch {
     return null; /* any failure -> null, never throw */
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 6.6 Saved locations, start/end, appointment dialog                    */
+/* ------------------------------------------------------------------ */
+
+/* Dedupe key for a saved location: prefer coords, fall back to address. */
+function savedLocationKey(loc) {
+  if (!loc || typeof loc !== 'object') return '';
+  if (typeof loc.lat === 'number' && typeof loc.lng === 'number') {
+    return 'geo:' + loc.lat.toFixed(5) + ',' + loc.lng.toFixed(5);
+  }
+  var addr = String(loc.address || '').trim().toLowerCase();
+  return addr ? 'addr:' + addr : '';
+}
+
+/* True if a location matching `loc` is in the saved list. */
+function isSavedLocation(saved, loc) {
+  var key = savedLocationKey(loc);
+  if (!key) return false;
+  return (saved || []).some(function (s) { return savedLocationKey(s) === key; });
+}
+
+/* Toggle a location in the saved list. Returns {saved: [...], added: bool}. */
+function toggleSavedLocation(saved, loc) {
+  var list = Array.isArray(saved) ? saved.slice() : [];
+  var key = savedLocationKey(loc);
+  if (!key) return { saved: list, added: false };
+  var idx = -1;
+  for (var i = 0; i < list.length; i++) {
+    if (savedLocationKey(list[i]) === key) { idx = i; break; }
+  }
+  if (idx >= 0) {
+    list.splice(idx, 1);
+    return { saved: list, added: false };
+  }
+  var name = (loc.name && String(loc.name).trim()) || String(loc.address || '').trim();
+  list.push({
+    name: name || 'Saved location',
+    address: String(loc.address || '').trim(),
+    lat: typeof loc.lat === 'number' ? loc.lat : null,
+    lng: typeof loc.lng === 'number' ? loc.lng : null,
+  });
+  return { saved: list, added: true };
+}
+
+/* Rename a saved location by key. Returns new array (or original if not found). */
+function renameSavedLocation(saved, key, newName) {
+  var list = Array.isArray(saved) ? saved.slice() : [];
+  var name = String(newName || '').trim();
+  if (!name) return list;
+  for (var i = 0; i < list.length; i++) {
+    if (savedLocationKey(list[i]) === key) {
+      list[i] = {
+        name: name,
+        address: list[i].address,
+        lat: list[i].lat,
+        lng: list[i].lng,
+      };
+      break;
+    }
+  }
+  return list;
+}
+
+/* Filter saved locations for the dropdown: empty query shows all,
+ * otherwise match against name + address (case-insensitive). */
+function filterSavedLocations(saved, query) {
+  var list = Array.isArray(saved) ? saved : [];
+  var q = String(query || '').trim().toLowerCase();
+  if (!q) return list.slice();
+  return list.filter(function (s) {
+    return (String(s.name || '').toLowerCase().indexOf(q) >= 0) ||
+            String(s.address || '').toLowerCase().indexOf(q) >= 0;
+  });
+}
+
+/* Normalize a start/end endpoint for optimization.
+ * Returns null when the endpoint is empty/unset (caller skips it silently). */
+function normalizeEndpoint(ep) {
+  if (!ep || typeof ep !== 'object') return null;
+  var hasCoords = typeof ep.lat === 'number' && typeof ep.lng === 'number';
+  var hasLabel = ep.label && String(ep.label).trim();
+  if (!hasCoords && !hasLabel) return null;
+  return {
+    label: hasLabel ? String(ep.label).trim() : 'Current location',
+    lat: hasCoords ? ep.lat : null,
+    lng: hasCoords ? ep.lng : null,
+  };
+}
+
+/* Merge job types for the appointment dialog dropdown:
+ * learned types (from serviceTimes.known) + custom types + types on stops.
+ * Returns a deduped, sorted array. */
+function collectAllJobTypes(known, custom, stops) {
+  var seen = {};
+  var out = [];
+  function add(t) {
+    var v = String(t || '').trim();
+    if (v && !seen[v.toLowerCase()]) { seen[v.toLowerCase()] = 1; out.push(v); }
+  }
+  (known || []).forEach(add);
+  (custom || []).forEach(add);
+  (stops || []).forEach(function (s) { add(s && s.jobType); });
+  out.sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
+  return out;
+}
+
+/* Add a custom job type. Returns new array (unchanged if blank/duplicate). */
+function addCustomJobType(custom, name) {
+  var list = Array.isArray(custom) ? custom.slice() : [];
+  var v = String(name || '').trim();
+  if (!v) return list;
+  var dup = list.some(function (t) { return String(t).toLowerCase() === v.toLowerCase(); });
+  if (!dup && list.length < 60) list.push(v);
+  return list;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1250,7 +1404,19 @@ var RouteCore = {
   trafficBucketKey: trafficBucketKey,
   learnedTrafficFactorAt: learnedTrafficFactorAt,
   recordTrafficSample: recordTrafficSample,
-  rainFactorFor: rainFactorFor
+  rainFactorFor: rainFactorFor,
+  geocodeSuffix: geocodeSuffix,
+  photonBias: photonBias,
+  classifyPrecision: classifyPrecision,
+  PRECISE_ACCURACY_M: PRECISE_ACCURACY_M,
+  savedLocationKey: savedLocationKey,
+  isSavedLocation: isSavedLocation,
+  toggleSavedLocation: toggleSavedLocation,
+  renameSavedLocation: renameSavedLocation,
+  filterSavedLocations: filterSavedLocations,
+  normalizeEndpoint: normalizeEndpoint,
+  collectAllJobTypes: collectAllJobTypes,
+  addCustomJobType: addCustomJobType
 };
 
 if (typeof module !== 'undefined' && module.exports) {

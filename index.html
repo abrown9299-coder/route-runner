@@ -6,13 +6,13 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261002-203451">
+<meta name="app-version" content="20261004-034835">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" type="image/png" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20261002-203451">
+<link rel="stylesheet" href="styles.css?v=20261004-034835">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <script>
 /* Stale-code gate: runs before anything else. If this HTML is stale
@@ -24,7 +24,7 @@
     var local = stamped ? stamped.getAttribute('content') : '';
     // Skip if this is already a cache-busted reload (avoid loops).
     if (/[?&]v=/.test(location.search)) return;
-    if (!local || local.indexOf('20261002-203451') !== -1) return; // dev, unstamped
+    if (!local || local.indexOf('20261004-034835') !== -1) return; // dev, unstamped
     fetch('version.json', { cache: 'no-store' }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (info) {
@@ -39,6 +39,14 @@
 </script>
 </head>
 <body>
+
+<!-- Approximate-location banner: shown when GPS accuracy > 100m (iOS
+     "Precise Location" off). Non-blocking — the app works, just warns. -->
+<div id="precisionBanner" hidden class="precision-banner">
+  📍 Approximate location detected. For best routing, enable Precise Location:
+  iOS Settings → Privacy → Location Services → Safari → Precise Location ON.
+  <button id="precisionBannerClose" class="icon-btn" aria-label="Dismiss">✕</button>
+</div>
 
 <!-- Install gate: RouteRunner must run installed, not in the browser.
      Shown instantly by the inline script below; app.js fills in the steps. -->
@@ -115,7 +123,7 @@
     <div id="manualForm" hidden>
       <input id="mStreet" placeholder="Street (e.g. 1014 Kirkwood Ave)">
       <div class="mrow">
-        <input id="mCity" placeholder="City" value="Nashville">
+        <input id="mCity" placeholder="City">
         <input id="mState" placeholder="ST" value="TN" maxlength="2">
         <input id="mZip" placeholder="ZIP" inputmode="numeric">
       </div>
@@ -135,7 +143,13 @@
       <button id="clearAllBtn" class="btn ghost" style="display:none">🗑 Clear</button>
     </div>
     <div id="driveSummary" class="drive-summary" hidden></div>
-    <div id="mapWrap" hidden><div id="map"></div></div>
+    <div id="mapWrap" hidden>
+      <div id="map"></div>
+      <div id="locationHint" hidden class="location-hint">
+        📍 Enable location for better results
+        <button id="locationHintRetry" class="btn secondary small">Retry</button>
+      </div>
+    </div>
     <ul id="stopList"></ul>
     <p id="emptyHint">No stops yet — add screenshots of your schedule or search an address above.</p>
   </section>
@@ -172,14 +186,24 @@
 <div id="settingsSheet" hidden>
   <div class="sheet">
     <div class="sheet-head"><h2>Settings</h2><button id="settingsClose" class="icon-btn">✕</button></div>
-    <label class="set-row"><span>Mode</span><select id="setMode">
+    <label class="set-row"><span>Profile</span><select id="setMode">
       <option value="work">Work</option><option value="personal">Personal</option>
     </select></label>
-    <p class="fine" id="modeHint">Work mode: confirmed windows, check-in, notes, job types.</p>
+    <p class="fine" id="modeHint">Work profile: confirmed windows, check-in, notes, job types.</p>
+    <label class="set-row"><span>Home location <small>(optional — override GPS for searches)</small></span>
+      <span style="display:flex;gap:8px;align-items:center;position:relative">
+        <span style="flex:1;position:relative">
+          <input id="setHome" placeholder="e.g. Austin, TX" style="width:100%" autocomplete="off">
+          <ul id="setHomeSuggest" hidden></ul>
+        </span>
+        <button id="setHomeGps" class="btn ghost" title="Use current location">📡</button>
+        <button id="setHomeClear" class="btn ghost" title="Clear">✕</button>
+      </span></label>
+    <p class="fine" id="homeLocationDisplay"></p>
     <label class="set-row"><span>Default start address <small>(blank = GPS)</small></span>
       <span style="display:flex;gap:8px;align-items:center;position:relative">
         <span id="setStartWrap" style="flex:1;position:relative">
-          <input id="setStart" placeholder="e.g. 123 Main St, Nashville, TN" style="width:100%" autocomplete="off">
+          <input id="setStart" placeholder="e.g. 123 Main St" style="width:100%" autocomplete="off">
           <ul id="setStartSuggest" hidden></ul>
         </span>
         <button id="setStartGps" class="btn ghost" title="Use current location">📡</button>
@@ -187,7 +211,7 @@
     <label class="set-row"><span>Default end address <small>(home — after last stop)</small></span>
       <span style="display:flex;gap:8px;align-items:center;position:relative">
         <span id="setEndWrap" style="flex:1;position:relative">
-          <input id="setEnd" placeholder="e.g. 456 Oak Ave, Nashville, TN" style="width:100%" autocomplete="off">
+          <input id="setEnd" placeholder="e.g. 456 Oak Ave" style="width:100%" autocomplete="off">
           <ul id="setEndSuggest" hidden></ul>
         </span>
         <button id="setEndGps" class="btn ghost" title="Use current location">📡</button>
@@ -209,6 +233,11 @@
       <input id="trafficFile" type="file" accept=".json" hidden>
       <p class="fine" id="trafficStatus"></p>
     </div>
+    <div class="set-sec" id="savedSec">
+      <h3>⭐ Saved locations</h3>
+      <p class="fine">Tap the ⭐ on any address to save it here. Saved places appear first in every address dropdown.</p>
+      <ul id="savedList" class="saved-list"></ul>
+    </div>
     <div class="set-sec" id="svcSec">
       <h3>Service times</h3>
       <label class="set-row"><span>Default service time</span><select id="setSvcDefault"></select></label>
@@ -222,6 +251,56 @@
     <button id="diagBtn" class="btn">🛠 Download diagnostics</button>
     <p class="fine">Version <span id="appVer">…</span></p>
     <p class="fine">RouteRunner runs entirely on your phone. No account, no server, no AI.</p>
+  </div>
+</div>
+
+<!-- Add appointment / stop dialog (spec §5) -->
+<div id="apptSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2 id="apptTitle">➕ Add Appointment</h2><button id="apptClose" class="icon-btn">✕</button></div>
+    <label class="set-row"><span>Time</span>
+      <span style="display:flex;gap:8px;align-items:center">
+        <input id="apptTime" type="time" style="flex:1">
+        <label class="check-inline"><input id="apptAnytime" type="checkbox"> Anytime</label>
+      </span></label>
+    <label class="set-row"><span>Address</span>
+      <span style="display:flex;gap:8px;align-items:center">
+        <span id="apptAddrWrap" style="flex:1;position:relative">
+          <input id="apptAddr" placeholder="Street address…" autocomplete="off" style="width:100%">
+          <ul id="apptAddrSuggest" class="dd-list" hidden></ul>
+        </span>
+        <button id="apptStar" class="star-btn" title="Save this location">☆</button>
+      </span></label>
+    <label class="set-row" id="apptJobRow"><span>Job type</span>
+      <span style="display:flex;gap:8px;align-items:center">
+        <select id="apptJob" style="flex:1"></select>
+      </span></label>
+    <div id="apptNewJobWrap" hidden style="margin-top:8px">
+      <span style="display:flex;gap:8px">
+        <input id="apptNewJob" placeholder="New job type name…" style="flex:1">
+        <button id="apptNewJobAdd" class="btn secondary">Add</button>
+      </span>
+    </div>
+    <div class="btn-row" style="margin-top:16px">
+      <button id="apptSave" class="btn primary">Save</button>
+      <button id="apptCancel" class="btn secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Endpoint (start/end) address editor sheet -->
+<div id="epSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2 id="epTitle">📍 Start location</h2><button id="epClose" class="icon-btn">✕</button></div>
+    <span style="display:flex;gap:8px;align-items:center">
+      <span id="epWrap" style="flex:1;position:relative">
+        <input id="epInput" placeholder="Search address…" autocomplete="off" style="width:100%">
+        <ul id="epSuggest" class="dd-list" hidden></ul>
+      </span>
+      <button id="epStar" class="star-btn" title="Save this location">☆</button>
+    </span>
+    <button id="epGps" class="btn" style="width:100%;margin-top:12px">📡 Use current location</button>
+    <button id="epSave" class="btn primary" style="width:100%;margin-top:8px">Done</button>
   </div>
 </div>
 
@@ -275,6 +354,39 @@
   </div>
 </div>
 
+<!-- GPS developer mode (hidden: 5 rapid taps on the header brand). Testing only — never persisted. -->
+<div id="devSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>🧪 Dev · GPS override</h2><button id="devClose" class="icon-btn">✕</button></div>
+    <p class="fine" style="text-align:left">Testing only. Simulated GPS never leaves this page and is never saved.</p>
+    <div class="set-sec">
+      <h3>Manual position</h3>
+      <label class="set-row"><span>Latitude</span><input id="devLat" inputmode="decimal" placeholder="36.1622"></label>
+      <label class="set-row"><span>Longitude</span><input id="devLng" inputmode="decimal" placeholder="-86.7816"></label>
+      <div class="btn-row">
+        <button id="devSetPos" class="btn primary">Set position</button>
+        <button id="devClear" class="btn secondary">Clear override</button>
+      </div>
+    </div>
+    <div class="set-sec">
+      <h3>Simulate movement</h3>
+      <p class="fine">Moves the virtual position along the remaining stops, in route order.</p>
+      <label class="set-row"><span>Speed</span><select id="devSpeed">
+        <option value="1">1× walk (~5 km/h)</option>
+        <option value="10" selected>10× drive (~50 km/h)</option>
+        <option value="60">60× (~300 km/h)</option>
+      </select></label>
+      <div class="btn-row">
+        <button id="devSimStart" class="btn primary">▶ Simulate</button>
+        <button id="devSimStop" class="btn secondary">⏹ Stop</button>
+      </div>
+      <p class="fine" id="devSimStatus"></p>
+    </div>
+    <p class="fine" id="devPosLine">Virtual position: —</p>
+    <button id="devExit" class="btn danger" style="width:100%">Exit dev mode</button>
+  </div>
+</div>
+
 <!-- Leg chooser -->
 <div id="legSheet" hidden>
   <div class="sheet">
@@ -285,6 +397,9 @@
 </div>
 
 <div id="toast" hidden></div>
+
+<!-- GPS dev-mode indicator: shown only while a virtual position is active -->
+<div id="devBadge" hidden title="DEV MODE: GPS is simulated, not real">DEV · SIM GPS</div>
 
 <script>
   /* Boot watchdog: if the app never finishes starting (blank page after an
@@ -340,8 +455,8 @@
   })();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-<script src="core.js?v=20261002-203451"></script>
-<script src="ocr.js?v=20261002-203451"></script>
-<script src="app.js?v=20261002-203451"></script>
+<script src="core.js?v=20261004-034835"></script>
+<script src="ocr.js?v=20261004-034835"></script>
+<script src="app.js?v=20261004-034835"></script>
 </body>
 </html>
