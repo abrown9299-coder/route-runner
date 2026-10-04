@@ -1,0 +1,106 @@
+import js from '@eslint/js';
+
+export default [
+  js.configs.recommended,
+  {
+    files: ['app/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'script',
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        navigator: 'readonly',
+        location: 'readonly',
+        history: 'readonly',
+        localStorage: 'readonly',
+        sessionStorage: 'readonly',
+        indexedDB: 'readonly',
+        fetch: 'readonly',
+        console: 'readonly',
+        prompt: 'readonly',
+        confirm: 'readonly',
+        FormData: 'readonly',
+        File: 'readonly',
+        Image: 'readonly',
+        AbortController: 'readonly',
+        btoa: 'readonly',
+        atob: 'readonly',
+        Buffer: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+        requestAnimationFrame: 'readonly',
+        URL: 'readonly',
+        URLSearchParams: 'readonly',
+        Blob: 'readonly',
+        FileReader: 'readonly',
+        Worker: 'readonly',
+        Notification: 'readonly',
+        L: 'readonly',
+        Tesseract: 'readonly',
+        Sortable: 'readonly',
+        RR_OCR: 'readonly',
+        module: 'writable',
+        // service worker
+        self: 'readonly',
+        caches: 'readonly',
+      },
+    },
+    rules: {
+      'no-unused-vars': 'error',
+      'no-empty': ['error', { allowEmptyCatch: true }],
+    },
+  },
+  {
+    files: ['dev/**/*.js', 'e2e/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        URL: 'readonly',
+        // e2e addInitScript runs in browser context
+        navigator: 'readonly',
+        window: 'readonly',
+        document: 'readonly',
+      },
+    },
+    rules: {
+      'no-unused-vars': 'error',
+    },
+  },
+  {
+    ignores: ['node_modules/**', 'app/vendor/**', 'build/**', 'coverage/**'],
+  },
+  {
+    // Legacy manual harnesses (CJS). Being replaced by Playwright per TESTING.md,
+    // but still referenced in SPEC.md — keep lint-clean until removed.
+    files: ['dev/harness-*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'script',
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        require: 'readonly',
+        module: 'writable',
+        __dirname: 'readonly',
+        __filename: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        URL: 'readonly',
+        Buffer: 'readonly',
+      },
+    },
+    rules: {
+      'no-unused-vars': 'error',
+      'no-empty': ['error', { allowEmptyCatch: true }],
+    },
+  },
+];
