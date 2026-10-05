@@ -6,14 +6,14 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261005-041255">
+<meta name="app-version" content="20261005-174103">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" type="image/png" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20261005-041255">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="styles.css?v=20261005-174103">
+<link rel="stylesheet" href="vendor/leaflet.css">
 <script>
 /* Stale-code gate: runs before anything else. If this HTML is stale
  * (cached by SW or browser), the version won't match version.json and we
@@ -24,7 +24,7 @@
     var local = stamped ? stamped.getAttribute('content') : '';
     // Skip if this is already a cache-busted reload (avoid loops).
     if (/[?&]v=/.test(location.search)) return;
-    if (!local || local.indexOf('20261005-041255') !== -1) return; // dev, unstamped
+    if (!local || local.indexOf('20261005-174103') !== -1) return; // dev, unstamped
     fetch('version.json', { cache: 'no-store' }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (info) {
@@ -163,9 +163,13 @@
 <!-- OCR progress overlay -->
 <div id="ocrOverlay" hidden>
   <div class="ocr-box">
-    <h3>Reading screenshots…</h3>
+    <h3 id="ocrTitle">Reading screenshots…</h3>
     <div class="ocr-bar"><div id="ocrBarFill"></div></div>
     <p id="ocrStatus"></p>
+    <div id="ocrActions" class="btn-row" hidden>
+      <button id="ocrRetry" class="btn">↻ Retry</button>
+      <button id="ocrDismiss" class="btn ghost">Dismiss</button>
+    </div>
   </div>
 </div>
 
@@ -243,6 +247,15 @@
       <div id="svcRows"></div>
       <button id="svcResetAll" class="btn">Reset all to default</button>
       <p class="fine">Job types are learned from your imports over time — each can have its own duration.</p>
+    </div>
+    <div class="set-sec">
+      <h3>Offline maps</h3>
+      <p class="fine">Map tiles for your current area are saved on this device so the map works without a signal.</p>
+      <div class="btn-row">
+        <button id="tilesRefresh" class="btn secondary">Refresh offline map tiles</button>
+        <button id="tilesClear" class="btn secondary">Clear offline map tiles</button>
+      </div>
+      <p class="fine" id="tilesStatus"></p>
     </div>
     <button id="clearRoute" class="btn danger">🗑 Clear current route</button>
     <button id="shareBtn" class="btn">🔗 Share the app</button>
@@ -405,17 +418,38 @@
      interrupted update, a failed restore, a blocked script…), never leave the
      user staring at a dead screen with no way out. One automatic reload is
      attempted; if the page is still dead after that, an escape hatch is shown.
-     Inline on purpose — it must work even when app.js itself fails to load. */
+     Inline on purpose — it must work even when app.js itself fails to load.
+     The 8s timer starts only after the install gate (window.RRInstall.ready)
+     settles: a long first install on a slow connection is legitimate, not a
+     dead boot (INSTALL_SPEC.md IR15). */
   (function () {
     'use strict';
     var TRIED_KEY = 'rr.bootfail';
+    var armed = false;
     function tried() {
       try { return sessionStorage.getItem(TRIED_KEY) === '1'; } catch (e) { return false; }
     }
     function markTried() {
       try { sessionStorage.setItem(TRIED_KEY, '1'); } catch (e) {}
     }
-    setTimeout(function () {
+    function armWatchdog() {
+      if (armed) return; armed = true;
+      setTimeout(watchdogBody, 8000);
+    }
+    // install.js is a synchronous script later in the body; wait for it to
+    // define window.RRInstall before arming. If it never appears (blocked
+    // script), arm anyway — the app boots degraded and the watchdog applies.
+    function waitForInstaller(triesLeft) {
+      if (window.RRInstall && window.RRInstall.ready &&
+          typeof window.RRInstall.ready.then === 'function') {
+        window.RRInstall.ready.then(armWatchdog, armWatchdog);
+      } else if (triesLeft > 0) {
+        setTimeout(function () { waitForInstaller(triesLeft - 1); }, 250);
+      } else {
+        armWatchdog();
+      }
+    }
+    function watchdogBody() {
       if (window.__rrBooted) return;
       if (!tried()) { markTried(); location.reload(); return; }
       document.body.innerHTML =
@@ -450,12 +484,18 @@
           setTimeout(done, 3000);
         } catch (e) { done(); }
       };
-    }, 8000);
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function () { waitForInstaller(8); });
+    } else {
+      waitForInstaller(8);
+    }
   })();
 </script>
-<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-<script src="core.js?v=20261005-041255"></script>
-<script src="ocr.js?v=20261005-041255"></script>
-<script src="app.js?v=20261005-041255"></script>
+<script src="vendor/Sortable.min.js"></script>
+<script src="core.js?v=20261005-174103"></script>
+<script src="ocr.js?v=20261005-174103"></script>
+<script src="install.js?v=20261005-174103"></script>
+<script src="app.js?v=20261005-174103"></script>
 </body>
 </html>

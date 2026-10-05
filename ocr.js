@@ -76,23 +76,51 @@
     return out;
   }
 
-  async function load(progressFn) {
+  /* Worker creation timeout. The language data is self-hosted (see langPath
+   * below), but creation can still hang on a stalled network — the overlay
+   * must never hang forever. Overridable via opts for tests. */
+  const CREATE_TIMEOUT_MS = 60000;
+
+  async function load(progressFn, opts) {
     if (workerPromise) {
       try { await workerPromise; return workerPromise; }
       catch { workerPromise = null; }
     }
+    const timeoutMs = (opts && opts.timeoutMs) || CREATE_TIMEOUT_MS;
     workerPromise = (async () => {
       if (progressFn) progressFn('Loading text reader…');
-      // Self-hosted: no CDN for the library code
+      // Self-hosted: no CDN for the library code, the core, or the language data.
       await loadScript('vendor/tesseract.min.js');
       if (progressFn) progressFn('Preparing reader…');
-      const worker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM, {
+      // Absolute vendor URL: both the trained data fetch and the core
+      // importScripts run inside the web worker, where relative URLs resolve
+      // against worker.min.js — a bare relative path would break under the
+      // /route-runner/ subpath.
+      const vendorUrl = new URL('vendor/', document.baseURI).href.replace(/\/$/, '');
+      const creation = Tesseract.createWorker('eng', Tesseract.OEM.LSTM, {
         workerPath: 'vendor/worker.min.js',
-        corePath: 'vendor/tesseract-core.js',
-        // langPath: trained data downloads once from default CDN on first use,
-        // cached thereafter. Static download only — no user data is sent.
+        // Directory holding the tesseract.js-core v5 .wasm.js builds (the
+        // worker picks the SIMD/LSTM variant itself); wasm is embedded.
+        corePath: vendorUrl,
+        langPath: vendorUrl,
       });
-      return worker;
+      let timer;
+      const timeout = new Promise((_, rej) => {
+        timer = setTimeout(() => rej(new Error(
+          'Text reader failed to start (' + Math.round(timeoutMs / 1000) + 's timeout)')), timeoutMs);
+      });
+      try {
+        const worker = await Promise.race([creation, timeout]);
+        clearTimeout(timer);
+        return worker;
+      } catch (e) {
+        clearTimeout(timer);
+        // The caller never receives the worker — kill it if creation
+        // eventually resolves so nothing leaks.
+        creation.then((w) => { if (w && w.terminate) return w.terminate(); }).catch(() => {});
+        workerPromise = null;
+        throw (e instanceof Error ? e : new Error('Text reader failed to start'));
+      }
     })();
     return workerPromise;
   }

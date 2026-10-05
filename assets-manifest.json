@@ -1,0 +1,65 @@
+{
+  "manifestVersion": "20261005-174103",
+  "generatedAt": "2026-10-05T17:41:04.769870+00:00",
+  "assets": [
+    {
+      "path": "vendor/leaflet.min.js",
+      "sha256": "db49d009c841f5ca34a888c96511ae936fd9f5533e90d8b2c4d57596f4e5641a",
+      "bytes": 147552
+    },
+    {
+      "path": "vendor/leaflet.css",
+      "sha256": "a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6",
+      "bytes": 14806
+    },
+    {
+      "path": "vendor/Sortable.min.js",
+      "sha256": "ca68430703c4f5960e90735867c6e94d29b5a3de37107d8100e5a301007e9e6e",
+      "bytes": 44581
+    },
+    {
+      "path": "vendor/tesseract.min.js",
+      "sha256": "a8e29918d098b2b06e1012bdaeffb4aec0445c5d5654709023e0bd1f442a80e8",
+      "bytes": 66695
+    },
+    {
+      "path": "vendor/worker.min.js",
+      "sha256": "aca1229639fc9907d86f96e825955a2b7c5716d17f3bc3acd71f9c7ab66181fc",
+      "bytes": 123724
+    },
+    {
+      "path": "vendor/tesseract-core.wasm.js",
+      "sha256": "2b8c8c92b8788807061fb4bb16c5acdf000c149e100255f879f78d2c58ca9969",
+      "bytes": 4734777
+    },
+    {
+      "path": "vendor/tesseract-core-simd.wasm.js",
+      "sha256": "63f232c4f7a97b04e52eb940202700b2c6239783a75d0ff0553274fac530cd5c",
+      "bytes": 4735153
+    },
+    {
+      "path": "vendor/tesseract-core-lstm.wasm.js",
+      "sha256": "8f04aa0cc81e7bde33f80e92fa01a7a665f0b4884d098acf5de9c7104a11dfaa",
+      "bytes": 3938277
+    },
+    {
+      "path": "vendor/tesseract-core-simd-lstm.wasm.js",
+      "sha256": "ce20eda9533cbed1e6c2b4276fbae1e0adc61b6754b5513084be601787b457cf",
+      "bytes": 3938657
+    },
+    {
+      "path": "vendor/eng.traineddata.gz",
+      "sha256": "ed350f3752f81ee8f38769edc14d92d997dababe23b565c59879372cc46a2468",
+      "bytes": 10923060
+    }
+  ],
+  "tiles": {
+    "template": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    "zmin": 10,
+    "zmax": 15,
+    "radiusKm": 12,
+    "budgetTiles": 3000,
+    "budgetBytes": 157286400,
+    "throttleMs": 500
+  }
+}

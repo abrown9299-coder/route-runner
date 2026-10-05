@@ -1,10 +1,10 @@
 /* RouteRunner app.js — UI wiring. Pure-algorithm work lives in core.js (window.RouteCore). */
-/* global RouteCore: readonly */
+/* global RouteCore: readonly, Response: readonly */
 (function () {
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '__BUILD__';
+  const RR_BUILD = '20261005-174103';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
   const LS_TRAFFIC = 'rr.traffic.learn.v1';
@@ -1031,12 +1031,13 @@
   };
 
   /* ---------- add: screenshots / OCR ---------- */
-  $('ocrBtn').onclick = () => $('fileInput').click();
-  $('fileInput').addEventListener('change', async (e) => {
-    const files = [...e.target.files];
-    e.target.value = '';
+  let ocrPendingFiles = [];
+  async function runOcrImport(files) {
     if (!files.length) return;
     if (state.stops.length + files.length * 8 > 40) { /* soft guard */ }
+    $('ocrTitle').textContent = 'Reading screenshots…';
+    $('ocrActions').hidden = true;
+    $('ocrBarFill').style.width = '0%';
     $('ocrOverlay').hidden = false;
     const all = [];
     try {
@@ -1073,7 +1074,9 @@
       }
       await RR_OCR.done();
     } catch {
-      $('ocrOverlay').hidden = true;
+      $('ocrTitle').textContent = 'Text reader failed';
+      $('ocrStatus').textContent = 'The text reader could not start — check your connection and retry.';
+      $('ocrActions').hidden = false;
       toast('Could not load the text reader — check connection and retry');
       return;
     }
@@ -1088,7 +1091,15 @@
     markDirty('Added ' + added + ' stop' + (added === 1 ? '' : 's') +
       (merged.removed ? ' · ' + merged.removed + ' duplicate' + (merged.removed === 1 ? '' : 's') + ' skipped' : ''));
     geocodeInBackground();
+  }
+  $('ocrBtn').onclick = () => $('fileInput').click();
+  $('fileInput').addEventListener('change', (e) => {
+    ocrPendingFiles = [...e.target.files];
+    e.target.value = '';
+    runOcrImport(ocrPendingFiles);
   });
+  $('ocrRetry').onclick = () => runOcrImport(ocrPendingFiles);
+  $('ocrDismiss').onclick = () => { $('ocrOverlay').hidden = true; };
 
   function addStops(arr) {
     if (!arr.length) return 0;
@@ -2341,6 +2352,26 @@
       toast('Could not check — are you online?');
     }
   };
+  // Offline map tiles (INSTALL_SPEC.md IR8/IR19): on-demand refresh for the
+  // current location (merge, never wipe) and a secondary clear option.
+  $('tilesRefresh').onclick = async () => {
+    const inst = window.__rrInstall;
+    if (!inst || !inst.refreshTiles) { toast('Tile refresh unavailable'); return; }
+    $('tilesStatus').textContent = 'Fetching tiles for your current location…';
+    const res = await inst.refreshTiles();
+    if (res && res.ok) {
+      $('tilesStatus').textContent = (res.notes && res.notes[0]) || 'Tiles refreshed.';
+    } else {
+      $('tilesStatus').textContent = 'Tile refresh failed: ' + ((res && res.error) || 'unknown error');
+    }
+  };
+  $('tilesClear').onclick = async () => {
+    const inst = window.__rrInstall;
+    if (!inst || !inst.clearTiles) { toast('Tile clearing unavailable'); return; }
+    if (!confirm('Delete all saved offline map tiles? The map will still work online.')) return;
+    await inst.clearTiles();
+    $('tilesStatus').textContent = 'Offline map tiles cleared.';
+  };
   function loadSharedRoute() {
     if (!location.hash.startsWith('#r=')) return false;
     const data = RouteCore.decodeShare(location.hash);
@@ -2390,6 +2421,106 @@
   }
   attachAddressDropdown('originSearchInput', 'originSuggestList', 'originSearchWrap', onOriginPick);
 
+  /* ---------- offline tiles (INSTALL_SPEC.md IR11) ---------- */
+  // Same template the install manifest pre-fetches with — deploy.py
+  // asserts this matches the manifest tile template so cache hits align.
+  const TILE_TEMPLATE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  const TILES_CACHE = 'routerunner-tiles-v1';
+  const LS_TILE_META = 'rr.tiles.meta.v1';
+  const LS_TILE_CFG = 'rr.tiles.cfg.v1';
+  const TILE_BUDGET_BYTES = 157286400; // fallback; the installer refreshes from the manifest
+  const TILE_BUDGET_TILES = 3000;
+
+  let tileMeta = null; // [{u, b, t}] oldest-first; persisted on pagehide
+  let tileMetaDirty = false;
+  function loadTileMeta() {
+    if (tileMeta) return tileMeta;
+    tileMeta = [];
+    try {
+      const arr = JSON.parse(localStorage.getItem(LS_TILE_META) || 'null');
+      if (Array.isArray(arr)) tileMeta = arr.filter((e) => e && typeof e.u === 'string');
+    } catch {}
+    return tileMeta;
+  }
+  function saveTileMeta() {
+    if (!tileMetaDirty || !tileMeta) return;
+    tileMetaDirty = false;
+    try { localStorage.setItem(LS_TILE_META, JSON.stringify(tileMeta.slice(-TILE_BUDGET_TILES))); } catch {}
+  }
+  function tileBudgetBytes() {
+    try {
+      const cfg = JSON.parse(localStorage.getItem(LS_TILE_CFG) || 'null');
+      if (cfg && Number(cfg.budgetBytes) > 0) return Number(cfg.budgetBytes);
+    } catch {}
+    return TILE_BUDGET_BYTES;
+  }
+  async function tileCachePut(url, blob) {
+    const meta = loadTileMeta();
+    const now = Date.now();
+    const existing = meta.find((e) => e.u === url);
+    if (existing) { existing.t = now; tileMetaDirty = true; saveTileMeta(); return; }
+    try {
+      const cache = await caches.open(TILES_CACHE);
+      await cache.put(url, new Response(blob, { headers: { 'content-type': 'image/png' } }));
+    } catch { return; }
+    meta.push({ u: url, b: blob.size || 0, t: now });
+    tileMetaDirty = true;
+    // Oldest-first eviction when over budget (IR11/IR19).
+    const budget = tileBudgetBytes();
+    let total = meta.reduce((s, e) => s + (e.b || 0), 0);
+    try {
+      const cache = await caches.open(TILES_CACHE);
+      while ((total > budget || meta.length > TILE_BUDGET_TILES) && meta.length) {
+        const evict = meta.shift();
+        total -= evict.b || 0;
+        try { await cache.delete(evict.u); } catch {}
+      }
+    } catch {}
+    saveTileMeta();
+  }
+  // Cache-first tile bytes for the map layer; null = fall back to the
+  // plain URL (network via the <img> element itself).
+  async function tileBytesForLayer(url) {
+    try {
+      const cache = await caches.open(TILES_CACHE);
+      const hit = await cache.match(url);
+      if (hit) return URL.createObjectURL(await hit.blob());
+    } catch {}
+    let resp = null;
+    try { resp = await fetch(url, { cache: 'no-store' }); } catch { /* offline */ }
+    if (!resp || !resp.ok) return null;
+    const blob = await resp.blob();
+    tileCachePut(url, blob).catch(() => {});
+    return URL.createObjectURL(blob);
+  }
+  function createCachedTileLayer() {
+    const CachedLayer = L.TileLayer.extend({
+      createTile: function (coords, done) {
+        const tile = document.createElement('img');
+        tile.alt = '';
+        tile.setAttribute('role', 'presentation');
+        L.DomEvent.on(tile, 'load', L.Util.bind(this._tileOnLoad, this, done, tile));
+        L.DomEvent.on(tile, 'error', L.Util.bind(this._tileOnError, this, done, tile));
+        const url = this.getTileUrl(coords);
+        tileBytesForLayer(url).then((blobUrl) => {
+          if (blobUrl) { tile.dataset.blobUrl = blobUrl; tile.src = blobUrl; }
+          else tile.src = url;
+        }).catch(() => { tile.src = url; });
+        return tile;
+      },
+      _removeTile: function (key) {
+        const entry = this._tiles[key];
+        if (entry && entry.el && entry.el.dataset && entry.el.dataset.blobUrl) {
+          try { URL.revokeObjectURL(entry.el.dataset.blobUrl); } catch {}
+        }
+        L.TileLayer.prototype._removeTile.call(this, key);
+      },
+    });
+    return new CachedLayer(TILE_TEMPLATE, {
+      attribution: '&copy; OpenStreetMap', maxZoom: 19,
+    });
+  }
+
   /* ---------- map ---------- */
   let mapObj = null, leafletLoading = null;
   function loadLeaflet() {
@@ -2397,7 +2528,7 @@
     if (leafletLoading) return leafletLoading;
     leafletLoading = new Promise((res, rej) => {
       const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js';
+      s.src = 'vendor/leaflet.min.js'; // vendored (IR18) — was a jsdelivr CDN URL
       s.onload = res; s.onerror = rej;
       document.head.appendChild(s);
     });
@@ -2411,9 +2542,7 @@
     $('mapToggle').textContent = '🗺 Hide';
     if (!mapObj) {
       mapObj = L.map('map');
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap', maxZoom: 19,
-      }).addTo(mapObj);
+      createCachedTileLayer().addTo(mapObj); // cache-first, network fallback (IR11)
       mapObj.on('click', (e) => {
         if (!state.pinModeStopId) return;
         const s = state.stops.find((x) => x.id === state.pinModeStopId);
@@ -3221,7 +3350,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '__BUILD__' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261005-174103' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
@@ -3314,61 +3443,76 @@
     }
   }
 
-  /* ---------- boot ---------- */
-  load();
-  if (!loadSharedRoute()) render();
-  try { const av = $('appVer'); if (av) av.textContent = APP_VERSION; } catch {}
-  try {
-    const u = new URL(location.href);
-    if (u.searchParams.has('v')) {
-      u.searchParams.delete('v');
-      history.replaceState(null, '', u.pathname + u.search + u.hash);
+  /* ---------- boot (gated on the install system, IR15) ---------- */
+  // The install/update screen (install.js) runs before any app UI, OCR
+  // init, or GPS prompt. If install.js failed to load, boot degraded
+  // rather than dead.
+  function bootApp() {
+    load();
+    if (!loadSharedRoute()) render();
+    try { const av = $('appVer'); if (av) av.textContent = APP_VERSION; } catch {}
+    try {
+      const u = new URL(location.href);
+      if (u.searchParams.has('v')) {
+        u.searchParams.delete('v');
+        history.replaceState(null, '', u.pathname + u.search + u.hash);
+      }
+    } catch {}
+    restoreUIState();
+    checkForUpdate();
+    // Resume auto check-in watch if it was on (work mode only).
+    if (settings.autoCheckin && isWorkMode()) startAutoCheckinWatch();
+    // Live blue-dot tracking: keep the map's "you are here" dot moving.
+    startDeviceTracking();
+    // Ask for location services right on launch: the permission prompt appears
+    // immediately, and the map can show "you are here" before optimize runs.
+    if (state.origin.type === 'gps' && state.origin.lat == null) {
+      ensureDevicePos().then(adoptDevicePos);
     }
-  } catch {}
-  restoreUIState();
-  checkForUpdate();
-  // Resume auto check-in watch if it was on (work mode only).
-  if (settings.autoCheckin && isWorkMode()) startAutoCheckinWatch();
-  // Live blue-dot tracking: keep the map's "you are here" dot moving.
-  startDeviceTracking();
-  // Ask for location services right on launch: the permission prompt appears
-  // immediately, and the map can show "you are here" before optimize runs.
-  if (state.origin.type === 'gps' && state.origin.lat == null) {
-    ensureDevicePos().then(adoptDevicePos);
-  }
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { saveUIState(); }
-    else {
-      // auto-delete check: a route completed yesterday is wiped on return
-      if (state.completedAt && !isSameDay(state.completedAt, Date.now()) &&
-          state.stops.length && state.stops.every((x) => x.done)) {
-        wipeRouteData();
-        state.stops = []; state.completedAt = null;
-        state.optimized = false; state.lastSchedule = null; state.returnActive = false; state.endActive = false;
-        save(); render();
-        toast('Yesterday\'s completed route was cleared');
-      }
-      checkForUpdate(); maybeAutoReopt('visible');
-      // Proximity check on return: iOS suspends geolocation in background,
-      // so check immediately when the app becomes visible.
-      if (isWorkMode() && settings.autoCheckin && !state.checkedIn && 'geolocation' in navigator) {
-        navigator.geolocation.getCurrentPosition((pos) => {
-          checkinAtGps(pos);
-        }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
-      }
-    } // reopened: fresh times + re-route
-  });
-  window.addEventListener('pagehide', saveUIState);
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { saveUIState(); }
+      else {
+        // auto-delete check: a route completed yesterday is wiped on return
+        if (state.completedAt && !isSameDay(state.completedAt, Date.now()) &&
+            state.stops.length && state.stops.every((x) => x.done)) {
+          wipeRouteData();
+          state.stops = []; state.completedAt = null;
+          state.optimized = false; state.lastSchedule = null; state.returnActive = false; state.endActive = false;
+          save(); render();
+          toast('Yesterday\'s completed route was cleared');
+        }
+        checkForUpdate(); maybeAutoReopt('visible');
+        // Proximity check on return: iOS suspends geolocation in background,
+        // so check immediately when the app becomes visible.
+        if (isWorkMode() && settings.autoCheckin && !state.checkedIn && 'geolocation' in navigator) {
+          navigator.geolocation.getCurrentPosition((pos) => {
+            checkinAtGps(pos);
+          }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
+        }
+      } // reopened: fresh times + re-route
     });
+    window.addEventListener('pagehide', () => { saveUIState(); saveTileMeta(); });
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+      });
+    }
+    // A restored/share-booted route with stops: verify the real drive time too
+    // (markDirty only fires on edits, not on boot).
+    if (state.stops.length && !state.optimized) schedulePreDriveTime();
+    // Closed and reopened: fresh transport times + automatic re-optimization
+    // around confirmed windows (settled after GPS/geocode get a beat).
+    setTimeout(() => maybeAutoReopt('boot'), 4000);
+    window.__rrBooted = true; // boot watchdog in index.html stands down
   }
-  // A restored/share-booted route with stops: verify the real drive time too
-  // (markDirty only fires on edits, not on boot).
-  if (state.stops.length && !state.optimized) schedulePreDriveTime();
-  // Closed and reopened: fresh transport times + automatic re-optimization
-  // around confirmed windows (settled after GPS/geocode get a beat).
-  setTimeout(() => maybeAutoReopt('boot'), 4000);
-  window.__rrBooted = true; // boot watchdog in index.html stands down
+  function bootWhenReady() {
+    function go() { try { bootApp(); } catch (e) { console.error(e); } }
+    try {
+      var inst = (typeof window !== 'undefined') ? window.RRInstall : null;
+      if (inst && inst.ready && typeof inst.ready.then === 'function') {
+        inst.ready.then(go, go);
+      } else { go(); }
+    } catch { go(); }
+  }
+  bootWhenReady();
 })();
