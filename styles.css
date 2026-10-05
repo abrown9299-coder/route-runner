@@ -257,9 +257,17 @@ main { padding: 14px 14px 0; max-width: 640px; margin: 0 auto; }
 .drive-summary[hidden] { display: none !important; }
 .drive-summary strong { color: var(--text); font-weight: 600; }
 .stop .acts { display: flex; gap: 2px; align-items: center; }
-.stop .acts button {
+.stop .acts button:not(.pill) {
   background: none; border: none; font-size: 20px; padding: 10px 8px; cursor: pointer; color: var(--text);
   min-width: 44px; min-height: 44px; /* thumb-sized tap targets */
+  -webkit-user-select: none; user-select: none;
+}
+/* pill buttons inside .acts keep a real button face (accent border, pill
+   background from .pill/.pill.set-btn) plus the 44px thumb target the reset
+   rule used to give them */
+.stop .acts button.pill {
+  min-width: 44px; min-height: 44px;
+  padding: 10px 16px; font-size: 13px; cursor: pointer;
   -webkit-user-select: none; user-select: none;
 }
 .stop .drag {
@@ -286,6 +294,23 @@ li.stop.confirmed { border-left: 3px solid var(--amber); }
 /* built-in beginning/ending rows: visually distinct from appointment stops */
 li.endpoint-row { border-style: dashed; }
 li.endpoint-row .num { color: var(--accent); }
+/* endpoint rows: the set button is centered in the row; star/✕ stay pinned at
+   the row's right edge. .acts wraps to its own full-width line so the
+   centered button can't overlap the address label on 360px screens. */
+.endpoint-row .acts {
+  flex: 1 1 100%;
+  margin-left: 0;
+  margin-top: 2px;
+  justify-content: center;
+  position: relative;
+}
+.endpoint-row .star-btn,
+.endpoint-row [data-act="clear-endpoint"] {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
 
 /* time-window popup */
 .win-times { display: flex; gap: 12px; margin: 12px 0 16px; }
@@ -374,12 +399,12 @@ button.link { background: none; border: none; color: var(--accent); font-size: 1
 #originSuggestList li small { display: block; color: var(--dim); font-size: 12px; }
 
 /* Overlays / sheets */
-#ocrOverlay, #settingsSheet, #legSheet, #winSheet, #riskSheet, #reoptSheet, #installGate, #originSheet, #devSheet, #apptSheet, #epSheet {
+#ocrOverlay, #settingsSheet, #legSheet, #winSheet, #riskSheet, #reoptSheet, #installGate, #originSheet, #devSheet, #apptSheet, #epSheet, #nickSheet, #setSheet {
   position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.6);
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 #installGate { z-index: 100; background: var(--bg); }
-#ocrOverlay[hidden], #settingsSheet[hidden], #legSheet[hidden], #winSheet[hidden], #riskSheet[hidden], #reoptSheet[hidden], #installGate[hidden], #originSheet[hidden], #devSheet[hidden], #apptSheet[hidden], #epSheet[hidden] { display: none; }
+#ocrOverlay[hidden], #settingsSheet[hidden], #legSheet[hidden], #winSheet[hidden], #riskSheet[hidden], #reoptSheet[hidden], #installGate[hidden], #originSheet[hidden], #devSheet[hidden], #apptSheet[hidden], #epSheet[hidden], #nickSheet[hidden], #setSheet[hidden] { display: none; }
 .ocr-box, .sheet {
   background: var(--card); border: 1px solid var(--line2); border-radius: 20px;
   padding: 22px; width: 100%; max-width: 420px; max-height: 85vh; overflow-y: auto;

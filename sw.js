@@ -1,5 +1,6 @@
-/* RouteRunner service worker — offline app shell. 20261005-184623 is stamped by dev/deploy.py. */
-const CACHE = 'routerunner-20261005-184623';
+/* RouteRunner service worker — offline app shell. 20261005-195952 is stamped by dev/deploy.py. */
+/* global Request: readonly, Response: readonly */
+const CACHE = 'routerunner-20261005-195952';
 const SHELL = [
   './', './index.html', './styles.css', './app.js', './core.js', './ocr.js', './install.js',
   './manifest.json', './icon-192.png', './icon-512.png',
@@ -29,7 +30,7 @@ async function installDelta() {
   try {
     const res = await fetch('assets-manifest.json', { cache: 'no-store' });
     if (res.ok) manifest = await res.json();
-  } catch (err) { /* offline on install — full download below */ }
+  } catch { /* offline on install — full download below */ }
   const newHashes = {};
   ((manifest && manifest.shell) || []).forEach((s) => { newHashes[s.path] = s.sha256; });
 
@@ -41,7 +42,7 @@ async function installDelta() {
       prev = await caches.open(prevKey);
       const hr = await prev.match(HASH_KEY);
       if (hr) prevHashes = await hr.json();
-    } catch (err) { prev = null; prevHashes = null; }
+    } catch { prev = null; prevHashes = null; }
   }
 
   try {
@@ -59,7 +60,7 @@ async function installDelta() {
     } else {
       await cache.addAll(SHELL); // first install or no hash history — full download
     }
-  } catch (err) {
+  } catch {
     // Delta failed mid-way: fall back to a full download so the new cache
     // is complete. addAll is atomic-ish (rejects on any failure → install
     // retries on next SW update).

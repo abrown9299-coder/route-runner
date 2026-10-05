@@ -1075,7 +1075,7 @@ function optimizeOrder(matrix, opts) {
         }
         var cc = costOf(cand);
         if (better(cc, curCost)) {
-          for (var q = 0; q < cand.length; q++) order[q] = cand[q];
+          for (q = 0; q < cand.length; q++) order[q] = cand[q];
           curCost = cc;
           improved = true;
           break;

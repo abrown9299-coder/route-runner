@@ -4,7 +4,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261005-184623';
+  const RR_BUILD = '20261005-195952';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
   const LS_TRAFFIC = 'rr.traffic.learn.v1';
@@ -1137,7 +1137,7 @@
   /* ---------- add: screenshots / OCR ---------- */
   let ocrPendingFiles = [];
   async function runOcrImport(files) {
-    if (!files.length) return;
+    if (!files || !files.length) { toast('No screenshots selected'); return; }
     if (state.stops.length + files.length * 8 > 40) { /* soft guard */ }
     $('ocrTitle').textContent = 'Reading screenshots…';
     $('ocrActions').hidden = true;
@@ -1196,11 +1196,24 @@
       (merged.removed ? ' · ' + merged.removed + ' duplicate' + (merged.removed === 1 ? '' : 's') + ' skipped' : ''));
     geocodeInBackground();
   }
-  $('ocrBtn').onclick = () => $('fileInput').click();
+  // Picker-cancel detection (2026-10-05): dismissing the native picker fires no
+  // `change` event, so the only signal is the window refocus that follows. We
+  // record when ocrBtn opened the picker; a focus within ~2.5s with no
+  // `change` in between means the user picked nothing. `change` always fires
+  // before `focus` on a real selection, so it cannot false-positive there.
+  let ocrPickerOpenedAt = 0;
+  $('ocrBtn').onclick = () => { ocrPickerOpenedAt = Date.now(); $('fileInput').click(); };
   $('fileInput').addEventListener('change', (e) => {
+    ocrPickerOpenedAt = 0; // files arrived — not a cancel
     ocrPendingFiles = [...e.target.files];
     e.target.value = '';
     runOcrImport(ocrPendingFiles);
+  });
+  window.addEventListener('focus', () => {
+    if (!ocrPickerOpenedAt) return;
+    const openedAt = ocrPickerOpenedAt; ocrPickerOpenedAt = 0;
+    if (Date.now() - openedAt > 2500) return; // stale — not our picker
+    toast('No screenshots selected');
   });
   $('ocrRetry').onclick = () => runOcrImport(ocrPendingFiles);
   $('ocrDismiss').onclick = () => { $('ocrOverlay').hidden = true; };
@@ -3454,7 +3467,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261005-184623' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261005-195952' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
@@ -3488,6 +3501,10 @@
   function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch {} }
   function ssDel(k) { try { sessionStorage.removeItem(k); } catch {} }
   function checkForUpdate() {
+    // Dev tree (unstamped 20261005-195952): version.json belongs to some other
+    // build — never "update" here, or the page reload-loops every ~30s.
+    // Mirrors the stale-code gate in index.html.
+    if (!APP_VERSION || APP_VERSION === 'dev' || APP_VERSION.indexOf('20261005-195952') !== -1) return;
     const now = Date.now();
     if (now - lastUpdateCheck < 30000) return; // throttle foreground checks
     lastUpdateCheck = now;
