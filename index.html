@@ -6,13 +6,13 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261005-033553">
+<meta name="app-version" content="20261005-035307">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" type="image/png" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20261005-033553">
+<link rel="stylesheet" href="styles.css?v=20261005-035307">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <script>
 /* Stale-code gate: runs before anything else. If this HTML is stale
@@ -24,7 +24,7 @@
     var local = stamped ? stamped.getAttribute('content') : '';
     // Skip if this is already a cache-busted reload (avoid loops).
     if (/[?&]v=/.test(location.search)) return;
-    if (!local || local.indexOf('20261005-033553') !== -1) return; // dev, unstamped
+    if (!local || local.indexOf('20261005-035307') !== -1) return; // dev, unstamped
     fetch('version.json', { cache: 'no-store' }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (info) {
@@ -454,8 +454,8 @@
   })();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-<script src="core.js?v=20261005-033553"></script>
-<script src="ocr.js?v=20261005-033553"></script>
-<script src="app.js?v=20261005-033553"></script>
+<script src="core.js?v=20261005-035307"></script>
+<script src="ocr.js?v=20261005-035307"></script>
+<script src="app.js?v=20261005-035307"></script>
 </body>
 </html>

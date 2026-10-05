@@ -366,12 +366,12 @@ button.link { background: none; border: none; color: var(--accent); font-size: 1
 #originSuggestList li small { display: block; color: var(--dim); font-size: 12px; }
 
 /* Overlays / sheets */
-#ocrOverlay, #settingsSheet, #legSheet, #winSheet, #riskSheet, #reoptSheet, #installGate, #originSheet, #devSheet {
+#ocrOverlay, #settingsSheet, #legSheet, #winSheet, #riskSheet, #reoptSheet, #installGate, #originSheet, #devSheet, #apptSheet, #epSheet {
   position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.6);
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 #installGate { z-index: 100; background: var(--bg); }
-#ocrOverlay[hidden], #settingsSheet[hidden], #legSheet[hidden], #winSheet[hidden], #riskSheet[hidden], #reoptSheet[hidden], #installGate[hidden], #originSheet[hidden], #devSheet[hidden] { display: none; }
+#ocrOverlay[hidden], #settingsSheet[hidden], #legSheet[hidden], #winSheet[hidden], #riskSheet[hidden], #reoptSheet[hidden], #installGate[hidden], #originSheet[hidden], #devSheet[hidden], #apptSheet[hidden], #epSheet[hidden] { display: none; }
 .ocr-box, .sheet {
   background: var(--card); border: 1px solid var(--line2); border-radius: 20px;
   padding: 22px; width: 100%; max-width: 420px; max-height: 85vh; overflow-y: auto;
