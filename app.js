@@ -4,7 +4,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261005-041255';
+  const RR_BUILD = '__BUILD__';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
   const LS_TRAFFIC = 'rr.traffic.learn.v1';
@@ -3221,7 +3221,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261005-041255' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '__BUILD__' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
