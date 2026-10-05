@@ -4,7 +4,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261005-174103';
+  const RR_BUILD = '20261005-184623';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
   const LS_TRAFFIC = 'rr.traffic.learn.v1';
@@ -316,40 +316,45 @@
     toastTimer = setTimeout(() => { t.hidden = true; }, action ? 6000 : 2800);
   }
 
-  /* ---------- start/end pinned rows (spec §1) ---------- */
-  // Auto-fill label from GPS when the endpoint is unset.
+  /* ---------- built-in beginning/ending location rows ---------- */
+  // 2026-10-05: dedicated rows — beginning pinned above the appointments,
+  // ending pinned below them (never attached to appointment rows). Each has
+  // a "set" button opening the one-menu chooser (current location / saved
+  // locations / add address). Unset start silently falls back to GPS at
+  // optimize time (ensureGeocoded); unset end is skipped silently.
   function endpointDisplay(which) {
     const ep = which === 'start' ? state.tripStart : state.tripEnd;
-    const norm = RouteCore.normalizeEndpoint(ep);
-    if (norm) return norm;
-    // Fall back to live GPS for the Start row only.
-    if (which === 'start' && devicePos) {
-      return { label: 'Current location', lat: devicePos.lat, lng: devicePos.lng };
-    }
-    return null;
+    return RouteCore.normalizeEndpoint(ep);
   }
-  function renderEndpointRows(ul) {
-    [['start', '▶', 'Start'], ['end', '■', 'End']].forEach(([which, icon, word]) => {
-      const disp = endpointDisplay(which);
-      const saved = disp && RouteCore.isSavedLocation(settings.savedLocations, disp);
-      const li = document.createElement('li');
-      li.className = 'stop endpoint-row' + (which === 'end' ? ' end-row' : '');
-      li.dataset.endpoint = which;
-      li.innerHTML =
-        '<span class="num">' + icon + '</span>' +
-        '<div class="info"><div class="addr">' + esc(disp ? disp.label : word + ' — not set') + '</div>' +
-        '<div class="meta"><span class="chip">' + (which === 'start' ? '▶ start' : '■ end') + '</span>' +
-        (disp && disp.lat == null ? '<span class="chip warn">📍 no location</span>' : '') +
-        '</div></div>' +
-        '<div class="acts">' +
-          '<button class="star-btn' + (saved ? ' on' : '') + '" data-act="star-endpoint" data-which="' + which + '" title="' +
-            (saved ? 'Unsave this location' : 'Save this location') + '">' + (saved ? '⭐' : '☆') + '</button>' +
-          (disp ? '<button data-act="clear-endpoint" data-which="' + which + '" title="Clear">✕</button>' : '') +
-        '</div>';
-      ul.appendChild(li);
-    });
+  function renderEndpointRow(ul, which) {
+    const isStart = which === 'start';
+    const disp = endpointDisplay(which);
+    // isSavedLocation keys on address/coords — build the same shape the
+    // click handler uses, or a coord-less saved endpoint renders ☆ (audit 2026-10-05).
+    const dispLoc = disp ? { name: disp.label, address: disp.label, lat: disp.lat, lng: disp.lng } : null;
+    const saved = dispLoc && RouteCore.isSavedLocation(settings.savedLocations, dispLoc);
+    const li = document.createElement('li');
+    li.className = 'stop endpoint-row' + (isStart ? '' : ' end-row');
+    li.dataset.endpoint = which;
+    const title = isStart ? 'Beginning location' : 'Ending location';
+    li.innerHTML =
+      '<span class="num">' + (isStart ? '▶' : '■') + '</span>' +
+      '<div class="info"><div class="addr">' + esc(disp ? disp.label : title) + '</div>' +
+      '<div class="meta">' +
+        (disp
+          ? (disp.lat == null ? '<span class="chip warn">📍 no location — tap set</span>' : '')
+          : '<span class="chip warn">not set</span>') +
+      '</div></div>' +
+      '<div class="acts">' +
+        '<button class="pill set-btn" data-act="set-endpoint" data-which="' + which + '" title="Set the ' +
+          (isStart ? 'beginning' : 'ending') + ' location">set</button>' +
+        '<button class="star-btn' + (saved ? ' on' : '') + '" data-act="star-endpoint" data-which="' + which + '" title="' +
+          (saved ? 'Unsave this location' : 'Save this location') + '">' + (saved ? '⭐' : '☆') + '</button>' +
+        (disp ? '<button data-act="clear-endpoint" data-which="' + which + '" title="Clear">✕</button>' : '') +
+      '</div>';
+    ul.appendChild(li);
   }
-  // Tap an endpoint row body → open the address editor sheet.
+  // Tap an endpoint row body → open the set chooser sheet.
   let editingEndpoint = null; // 'start' | 'end' | null
   function openEndpointEditor(which) {
     editingEndpoint = which;
@@ -365,7 +370,9 @@
     const btn = $('epStar');
     const q = $('epInput').value.trim();
     const disp = editingEndpoint ? endpointDisplay(editingEndpoint) : null;
-    const loc = q ? { name: q, address: q, lat: null, lng: null } : disp;
+    // Same address-keyed shape as renderEndpointRow (audit 2026-10-05).
+    const loc = q ? { name: q, address: q, lat: null, lng: null }
+      : (disp ? { name: disp.label, address: disp.label, lat: disp.lat, lng: disp.lng } : null);
     const on = loc && RouteCore.isSavedLocation(settings.savedLocations, loc);
     btn.classList.toggle('on', !!on);
     btn.textContent = on ? '⭐' : '☆';
@@ -389,8 +396,8 @@
 
     const ul = $('stopList');
     ul.innerHTML = '';
-    // Pinned Start / End rows (spec §1): always at the top, above stop #1.
-    renderEndpointRows(ul);
+    // Built-in beginning row: pinned at the top, above the appointments.
+    renderEndpointRow(ul, 'start');
     $('emptyHint').style.display = total ? 'none' : 'block';
     if (!total) {
       $('emptyHint').textContent = isWorkMode()
@@ -461,6 +468,8 @@
       if (needsPin) li.querySelector('.meta').style.cursor = 'pointer';
       ul.appendChild(li);
     });
+    // Built-in ending row: pinned below the appointments (manual or imported).
+    renderEndpointRow(ul, 'end');
     // return-to-start footer: the optimized route ends back at the origin
     if (state.returnActive && state.optimized) {
       const li = document.createElement('li');
@@ -470,18 +479,6 @@
         '<div class="info"><div class="addr">↩ Return to start</div>' +
         '<div class="meta"><span class="chip last">🏁 last stop</span></div></div>';
       ul.appendChild(li);
-    }
-    if (state.endActive && state.optimized) {
-      const endLabel = (state.tripEnd && state.tripEnd.label) || settings.defaultEnd || '';
-      if (endLabel) {
-        const li = document.createElement('li');
-        li.className = 'stop is-last return-row';
-        li.innerHTML =
-          '<span class="num">🏠</span>' +
-          '<div class="info"><div class="addr">' + esc(endLabel) + '</div>' +
-          '<div class="meta"><span class="chip last">🏠 home</span></div></div>';
-        ul.appendChild(li);
-      }
     }
 
     // status line
@@ -527,27 +524,38 @@
     const btn = e.target.closest('button[data-act]');
     const li = e.target.closest('li.stop');
     if (!li) return;
-    // Pinned start/end rows (spec §1): handled separately from stops.
+    // Built-in beginning/ending rows: handled separately from stops.
     if (li.dataset.endpoint) {
       const which = li.dataset.endpoint;
       const act = btn ? btn.dataset.act : null;
       if (act === 'star-endpoint') {
         const disp = endpointDisplay(which);
-        const loc = disp ? { name: disp.label, address: disp.label, lat: disp.lat, lng: disp.lng }
-                         : { name: which === 'start' ? 'Start' : 'End', address: '', lat: null, lng: null };
-        const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
-        settings.savedLocations = r.saved;
-        save(); render();
-        toast(r.added ? '⭐ Saved "' + loc.name + '"' : '☆ Unsaved');
+        if (!disp) { toast('Set the location first'); return; }
+        const loc = { name: disp.label, address: disp.label, lat: disp.lat, lng: disp.lng };
+        if (RouteCore.isSavedLocation(settings.savedLocations, loc)) {
+          if (!confirm('Unsave "' + loc.name + '"?')) return;
+          const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
+          settings.savedLocations = r.saved;
+          save(); render();
+          toast('☆ Unsaved');
+          return;
+        }
+        promptNickname(loc, (nickname) => {
+          const r = RouteCore.toggleSavedLocation(settings.savedLocations,
+            { name: nickname, address: loc.address, lat: loc.lat, lng: loc.lng });
+          settings.savedLocations = r.saved;
+          save(); render();
+          toast('⭐ Saved "' + nickname + '"');
+        });
         return;
       }
       if (act === 'clear-endpoint') {
         if (which === 'start') state.tripStart = null; else state.tripEnd = null;
-        markDirty(which === 'start' ? 'Start cleared — will use GPS' : 'End cleared');
+        markDirty(which === 'start' ? 'Beginning cleared — will use GPS' : 'Ending cleared');
         return;
       }
-      // Tap body → open the address editor.
-      openEndpointEditor(which);
+      // Set button or body tap → the one-menu chooser.
+      openSetSheet(which);
       return;
     }
     const s = state.stops.find((x) => x.id === li.dataset.id);
@@ -592,14 +600,23 @@
         lat: typeof s.lat === 'number' ? s.lat : null,
         lng: typeof s.lng === 'number' ? s.lng : null,
       };
-      // Confirm unsave when the route is optimized (location is in active use).
-      if (RouteCore.isSavedLocation(settings.savedLocations, loc) && state.optimized) {
-        if (!confirm('Unsave "' + loc.name + '"?')) return;
+      if (RouteCore.isSavedLocation(settings.savedLocations, loc)) {
+        // Confirm unsave when the route is optimized (location is in active use).
+        if (state.optimized && !confirm('Unsave "' + loc.name + '"?')) return;
+        const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
+        settings.savedLocations = r.saved;
+        save(); render();
+        toast('☆ Unsaved');
+        return;
       }
-      const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
-      settings.savedLocations = r.saved;
-      save(); render();
-      toast(r.added ? '⭐ Saved' : '☆ Unsaved');
+      // 2026-10-05: saving a location prompts for a nickname (Home, Office, …).
+      promptNickname(loc, (nickname) => {
+        const r = RouteCore.toggleSavedLocation(settings.savedLocations,
+          { name: nickname, address: loc.address, lat: loc.lat, lng: loc.lng });
+        settings.savedLocations = r.saved;
+        save(); render();
+        toast('⭐ Saved "' + nickname + '"');
+      });
     }
     else if (act === 'checkin') {
       const ci = state.checkedIn;
@@ -956,10 +973,21 @@
         ? { name: epPicked.label, address: epPicked.label, lat: epPicked.lat, lng: epPicked.lng }
         : (q ? { name: q, address: q, lat: null, lng: null } : null);
       if (!loc) { toast('Enter an address first'); return; }
-      const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
-      settings.savedLocations = r.saved;
-      save(); updateEpStar(); render();
-      toast(r.added ? '⭐ Saved' : '☆ Unsaved');
+      if (RouteCore.isSavedLocation(settings.savedLocations, loc)) {
+        const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
+        settings.savedLocations = r.saved;
+        save(); updateEpStar(); render();
+        toast('☆ Unsaved');
+        return;
+      }
+      // 2026-10-05: saving prompts for a nickname.
+      promptNickname(loc, (nickname) => {
+        const r = RouteCore.toggleSavedLocation(settings.savedLocations,
+          { name: nickname, address: loc.address, lat: loc.lat, lng: loc.lng });
+        settings.savedLocations = r.saved;
+        save(); updateEpStar(); render();
+        toast('⭐ Saved "' + nickname + '"');
+      });
     };
     $('epGps').onclick = () => {
       if (!devicePos) { toast('No GPS fix yet'); return; }
@@ -995,8 +1023,10 @@
     const norm = RouteCore.normalizeEndpoint(ep);
     if (which === 'start') state.tripStart = norm; else state.tripEnd = norm;
     $('epSheet').hidden = true;
+    $('setSheet').hidden = true;
+    setWhich = null;
     editingEndpoint = null; epPicked = null;
-    markDirty(which === 'start' ? 'Start updated' : 'End updated');
+    markDirty(which === 'start' ? 'Beginning location updated' : 'Ending location updated');
   }
   // Geocode a typed-but-unpicked endpoint address in the background.
   async function geocodeEndpoint(which) {
@@ -1016,6 +1046,80 @@
     } catch { /* offline — stays unlabeled */ }
   }
   wireEndpointEditor();
+
+  /* ---------- set-start/set-end chooser (2026-10-05) ---------- */
+  // One menu, three options: current location, saved locations (nicknames),
+  // add an address. Serves both built-in rows.
+  let setWhich = null; // 'start' | 'end' | null
+  function openSetSheet(which) {
+    setWhich = which;
+    $('setTitle').textContent = which === 'start' ? 'Set beginning location' : 'Set ending location';
+    $('setSavedList').hidden = true;
+    renderSetSavedList();
+    $('setSheet').hidden = false;
+  }
+  function closeSetSheet() { $('setSheet').hidden = true; setWhich = null; }
+  function renderSetSavedList() {
+    const ul = $('setSavedList');
+    ul.innerHTML = '';
+    const list = settings.savedLocations || [];
+    if (!list.length) {
+      const li = document.createElement('li');
+      li.innerHTML = '<span class="fine">No saved locations yet — tap ☆ on any stop to save one with a nickname.</span>';
+      ul.appendChild(li);
+      return;
+    }
+    list.forEach((s) => {
+      const li = document.createElement('li');
+      li.innerHTML = '<div class="addr">' + esc(s.name || s.address || 'Saved location') + '</div>' +
+        ((s.name && s.address && s.name !== s.address)
+          ? '<div class="fine">' + esc(s.address) + '</div>' : '');
+      li.style.cursor = 'pointer';
+      li.onclick = () => {
+        setEndpoint(setWhich, { label: s.name || s.address, lat: s.lat, lng: s.lng });
+      };
+      ul.appendChild(li);
+    });
+  }
+  $('setClose').onclick = closeSetSheet;
+  $('setSavedToggle').onclick = () => { const l = $('setSavedList'); l.hidden = !l.hidden; };
+  $('setGps').onclick = async () => {
+    const btn = $('setGps');
+    btn.disabled = true;
+    try {
+      const g = await getGps();
+      if (g && g.lat != null && g.lng != null) {
+        setEndpoint(setWhich, { label: 'Current location', lat: g.lat, lng: g.lng });
+      } else {
+        toast('Could not get your location — check GPS and retry');
+      }
+    } finally { btn.disabled = false; }
+  };
+  $('setAdd').onclick = () => {
+    const w = setWhich;
+    closeSetSheet();
+    openEndpointEditor(w); // existing address search sheet
+  };
+
+  /* ---------- nickname popup for newly saved locations (2026-10-05) ---------- */
+  let nickCb = null;
+  function promptNickname(loc, cb) {
+    nickCb = cb;
+    $('nickInput').value = loc.name || loc.address || '';
+    $('nickAddr').textContent = loc.address || '';
+    $('nickSheet').hidden = false;
+    setTimeout(() => { try { $('nickInput').focus(); $('nickInput').select(); } catch {} }, 50);
+  }
+  function closeNickSheet() { $('nickSheet').hidden = true; nickCb = null; }
+  $('nickCancel').onclick = closeNickSheet;
+  $('nickCancel2').onclick = closeNickSheet;
+  $('nickSave').onclick = () => {
+    const name = $('nickInput').value.trim();
+    if (!name) { toast('Give it a nickname'); return; }
+    const cb = nickCb;
+    closeNickSheet();
+    if (cb) cb(name);
+  };
 
   $('mAdd').onclick = async () => {
     const street = $('mStreet').value.trim();
@@ -3350,7 +3454,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261005-174103' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261005-184623' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');

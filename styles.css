@@ -281,7 +281,11 @@ li.stop.confirmed { border-left: 3px solid var(--amber); }
   transition: border-color .15s, color .15s;
 }
 .pill.checkin.on { border-color: var(--green); color: var(--green); background: var(--green-dim); }
+.pill.set-btn { border-color: var(--accent); color: var(--accent); }
 .return-row { border-style: dashed; opacity: .85; }
+/* built-in beginning/ending rows: visually distinct from appointment stops */
+li.endpoint-row { border-style: dashed; }
+li.endpoint-row .num { color: var(--accent); }
 
 /* time-window popup */
 .win-times { display: flex; gap: 12px; margin: 12px 0 16px; }

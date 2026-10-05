@@ -1,6 +1,6 @@
 {
-  "manifestVersion": "20261005-174103",
-  "generatedAt": "2026-10-05T17:41:04.769870+00:00",
+  "manifestVersion": "20261005-184623",
+  "generatedAt": "2026-10-05T18:46:24.198419+00:00",
   "assets": [
     {
       "path": "vendor/leaflet.min.js",
@@ -51,6 +51,53 @@
       "path": "vendor/eng.traineddata.gz",
       "sha256": "ed350f3752f81ee8f38769edc14d92d997dababe23b565c59879372cc46a2468",
       "bytes": 10923060
+    }
+  ],
+  "shell": [
+    {
+      "path": "index.html",
+      "sha256": "bad714fa7b1055c18e02630d712ca0b75733a594c420f52a1863dc2508823ce2",
+      "bytes": 25240
+    },
+    {
+      "path": "styles.css",
+      "sha256": "c4c4569fc488838974e0136d1120d870e42fc61e6817ba6ced3e4d2d83a95bb7",
+      "bytes": 22106
+    },
+    {
+      "path": "app.js",
+      "sha256": "18cf44e71f0ffbc58e599b5aa6e475be4835c3de2c06b8d5f839db213f5404a6",
+      "bytes": 166595
+    },
+    {
+      "path": "core.js",
+      "sha256": "f0e9fb2e9a55fb5b480f4315b0bd518d7668f7c6f908858f90d2bf5eead7db58",
+      "bytes": 62774
+    },
+    {
+      "path": "ocr.js",
+      "sha256": "fe088598e8aa0124d22486175047efd85f4bfe30998c0aaee20edb3cf6e41c57",
+      "bytes": 5780
+    },
+    {
+      "path": "install.js",
+      "sha256": "6ef4a40196bf3889d782750db61363fc19b204fdd803033a7295d988a1f67e0f",
+      "bytes": 33135
+    },
+    {
+      "path": "manifest.json",
+      "sha256": "ce385534184efb0b49ba8ae8c12c52e0c95b8bd16b9cb2c9f435233b098dddfb",
+      "bytes": 372
+    },
+    {
+      "path": "icon-192.png",
+      "sha256": "e80529dd21218cd3b642b68467b25d098a7c77161b10164e9dd7f5f9337ccc77",
+      "bytes": 36714
+    },
+    {
+      "path": "icon-512.png",
+      "sha256": "395af700465dc810823102c31513ec81c8e54ea19832187abcfaf9490d391950",
+      "bytes": 152332
     }
   ],
   "tiles": {

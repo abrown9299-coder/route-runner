@@ -38,7 +38,12 @@
  * (Aaron authorized 2026-10-01); names are not.
  */
 var CITY_ZIP_RE = /^(.+?),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?$/;
-var STREET_RE = /^\d+\s+[A-Za-z]/;
+/* Street line: house number + street name. The name may start with a letter
+ * ("Clairmont Pl") OR an ordinal number ("14th Ave", "5th St", "2nd Ave") —
+ * 2026-10-05: "1710 14th Ave N" was rejected by the letter-only version and a
+ * whole stop silently never imported. The ordinal branch requires trailing
+ * letters so a bare number ("123 456") still doesn't count as a street. */
+var STREET_RE = /^\d+\s+(?:[A-Za-z]|\d+[A-Za-z])/;
 
 /* Known pest-control job types for detection in schedule text.
  * These are service labels, not addresses — matched to populate jobType. */
@@ -380,13 +385,19 @@ var ABBR = {
 };
 
 /* Canonical key: normStreet|zip5. City/state intentionally excluded so a
- * missing/OCR-mangled city still dedupes against the same street+ZIP. */
+ * missing/OCR-mangled city still dedupes against the same street+ZIP.
+ * OCR_FIX: Tesseract often reads "Pl" (Place) as "PI" (lowercase-L vs
+ * capital-i confusion) — 2026-10-05: "2001 Convent PI Unit 6" vs
+ * "2001 Convent Pl Unit 6" failed to dedupe across two screenshots of the
+ * same schedule. A standalone "pi" token is ~always this error, never a
+ * real street word, so it normalizes to "pl". */
+var OCR_FIX = { pi: 'pl' };
 function normalizeStop(s) {
   var raw = (s && s.street) ? String(s.street) : '';
   var t = raw.toLowerCase().replace(/[''`]/g, '');
   t = t.replace(/[^\w\s]/g, ' ');          /* strip punctuation */
   t = t.split(/\s+/).filter(Boolean)
-       .map(function (w) { return ABBR[w] || w; }) /* USPS-abbrev normalize */
+       .map(function (w) { return OCR_FIX[w] || ABBR[w] || w; }) /* OCR + USPS-abbrev normalize */
        .join(' ');
   var zipm = ((s && s.zip) ? String(s.zip) : '').match(/\d{5}/);
   var zip5 = zipm ? zipm[0] : '';           /* ZIP+4 -> 5 digits */
@@ -647,17 +658,73 @@ function schedCtx(o, n) {
       if (w.start > maxStart) maxStart = w.start;
     }
   }
+  var departMin = (o.departMin !== null && o.departMin !== undefined) ? o.departMin : 0;
+  var bufferMin = (o.bufferMin !== null && o.bufferMin !== undefined) ? o.bufferMin : WINDOW_BUFFER_MIN;
+  var startIdx = (o.start === undefined || o.start === null) ? 0 : o.start;
+  /* Sunk windows (2026-10-05 field bug): a stop whose window is unmakeable
+   * even driving straight there from the start under free-flow times can
+   * never meet its deadline in ANY order. Counting it in the miss vector
+   * lets the solver demote it to last place to protect makeable windows —
+   * the "10 AM stop dead last" bug. Sunk stops are excluded from the miss
+   * vector; the hard window-order rule then keeps them in
+   * earliest-window-first position ("the commitment stands"). */
+  var sunk = {};
+  var durMin = o.durMin || null;
+  if (anyWindow && durMin && durMin[startIdx]) {
+    for (var si = 0; si < lim; si++) {
+      var sw = windows[si];
+      if (sw && sw.start !== null && sw.start !== undefined &&
+          sw.end !== null && sw.end !== undefined) {
+        var drive = durMin[startIdx][si];
+        var earliest = departMin + ((drive === null || drive === undefined) ? Infinity : drive);
+        if (earliest > sw.end - bufferMin) sunk[si] = true;
+      }
+    }
+  }
   return {
     windows: windows,
-    departMin: (o.departMin !== null && o.departMin !== undefined) ? o.departMin : 0,
+    departMin: departMin,
     serviceMin: o.serviceMin,
-    bufferMin: (o.bufferMin !== null && o.bufferMin !== undefined) ? o.bufferMin : WINDOW_BUFFER_MIN,
+    bufferMin: bufferMin,
     maxStart: maxStart,
     anyWindow: anyWindow,
+    sunk: sunk,
+    startIdx: startIdx,
+    firstIdx: (o.first === undefined) ? null : o.first,
+    lastIdx: (o.last === undefined) ? null : o.last,
     trafficFn: o.trafficFn,
     pointCoords: o.pointCoords,
     traffic: o.traffic
   };
+}
+
+/* Window-order inversions (2026-10-05): pairs of windowed stops visited out
+ * of earliest-window-start order. Pinned stops (first/last) and the start
+ * point are excluded — pins are deliberate user overrides. This is the
+ * FIRST lexicographic cost criterion: appointment order is never violated
+ * for drive time, misses, or lateness. */
+function windowInversions(order, ctx) {
+  var c = ctx || {};
+  var windows = c.windows || [];
+  var pinned = {};
+  [c.startIdx, c.firstIdx, c.lastIdx].forEach(function (v) {
+    if (v !== null && v !== undefined) pinned[v] = true;
+  });
+  var seq = [];
+  for (var k = 0; k < order.length; k++) {
+    var pi = order[k];
+    if (pinned[pi]) continue;
+    var w = windows[pi];
+    if (w && w.start !== null && w.start !== undefined &&
+        w.end !== null && w.end !== undefined) seq.push(pi);
+  }
+  var inv = 0;
+  for (var a = 0; a < seq.length; a++) {
+    for (var b = a + 1; b < seq.length; b++) {
+      if (windows[seq[a]].start > windows[seq[b]].start) inv++;
+    }
+  }
+  return inv;
 }
 
 /* Early-arrival opportunity: sometimes going to the NEXT stop first (arriving
@@ -707,6 +774,10 @@ function findEarlyArrivalOpportunity(order, durMin, ctx) {
       if (!origViolated[simSwap.violations[v2].point]) { newViolation = true; break; }
     }
     if (newViolation) continue;
+    /* 2026-10-05: the swap must not introduce a window-order inversion —
+     * appointment order is a hard constraint, never sacrificed for drive
+     * time, even as a suggestion. */
+    if (windowInversions(swapped, c) > windowInversions(ord, c)) continue;
 
     /* Find B's arrival in the swapped order — it should be early. */
     var bLeg = null;
@@ -806,17 +877,18 @@ function simulateSchedule(order, durMin, ctx) {
   return { legs: legs, driveMin: drive, violations: violations };
 }
 
-/* Total cost of an order, compared LEXICOGRAPHICALLY so confirmed stops are
- * protected in earliest-window-start order no matter what:
+/* Total cost of an order, compared LEXICOGRAPHICALLY (2026-10-05: window
+ * order is now a HARD constraint — appointment order is never violated):
+ *   0. window inversions — pairs of windowed stops visited out of
+ *      earliest-window-start order (pins excluded). Fewer always wins.
  *   1. miss vector — one slot per windowed stop, sorted by window start
  *      ascending; 1 = missed its buffered deadline, 0 = met. Compared slot
- *      by slot, earliest window first.
+ *      by slot, earliest window first. Sunk (unmakeable-in-any-order)
+ *      windows don't count.
  *   2. total lateness minutes across all violations.
- *   3. drive minutes.
- *   4. window order penalty — for missed windows, earlier windows should
- *      still come first in the route. A missed 11 AM appointment doesn't
- *      get demoted to last; it stays ahead of later-window stops.
- * A scalar weight can never guarantee (1); this ordering does. */
+ *   3. window order penalty (legacy tiebreak; 0 whenever inversions are 0).
+ *   4. drive minutes.
+ * A scalar weight can never guarantee (0); this ordering does. */
 function scheduleCost(order, durMin, ctx) {
   var sim = simulateSchedule(order, durMin, ctx);
   var winIdx = [];
@@ -831,7 +903,11 @@ function scheduleCost(order, durMin, ctx) {
     missed[sim.violations[k].point] = true;
     lateMin += sim.violations[k].lateMin;
   }
-  var misses = winIdx.map(function (i) { return missed[i] ? 1 : 0; });
+  /* Sunk windows (unmakeable from the start in any order) don't count as
+   * misses — no order can save them, and counting them lets the solver
+   * demote a doomed early appointment to last place (2026-10-05). */
+  var sunk = (ctx && ctx.sunk) || {};
+  var misses = winIdx.map(function (i) { return (missed[i] && !sunk[i]) ? 1 : 0; });
   // Window order penalty: for each pair of windowed stops where the earlier
   // window appears AFTER the later window in the route, add a penalty
   // proportional to the window gap. This keeps missed-window stops in
@@ -849,11 +925,13 @@ function scheduleCost(order, durMin, ctx) {
     }
   }
   return { misses: misses, lateMin: lateMin, driveMin: sim.driveMin,
-           orderPenalty: orderPenalty,
+           orderPenalty: orderPenalty, inversions: windowInversions(order, ctx),
            violations: sim.violations, legs: sim.legs };
 }
 /* True if cost a is strictly better than cost b under the lexicographic order. */
 function costLess(a, b) {
+  var ai = a.inversions || 0, bi = b.inversions || 0;
+  if (ai !== bi) return ai < bi;
   var n = Math.max(a.misses.length, b.misses.length);
   for (var i = 0; i < n; i++) {
     var am = a.misses[i] || 0, bm = b.misses[i] || 0;
@@ -913,8 +991,14 @@ function optimizeOrder(matrix, opts) {
   if (pinned !== null && (pinned < 0 || pinned >= n)) pinned = null;
   if (pinnedFirst !== null && pinnedFirst === pinned) pinnedFirst = null; /* can't be both */
 
-  /* nearest-neighbor from `start`; the pinned-first stop is visited right
-   * after start, the pinned-last stop is visited last */
+  /* Initial order. Without windows: nearest-neighbor from `start` (original
+   * behavior). With windows: windowed stops seed in earliest-window-start
+   * order (2026-10-05 — appointment order is a hard constraint, never
+   * violated for drive time), then nearest-neighbor fills the flexible
+   * stops; the pinned-first stop is visited right after start, the
+   * pinned-last stop is visited last. 2-opt below can only accept moves
+   * that don't add window inversions, so the windowed subsequence stays
+   * chronological while flexible stops get drive-optimized around it. */
   var order = [start];
   var used = {};
   used[start] = true;
@@ -925,6 +1009,26 @@ function optimizeOrder(matrix, opts) {
     cur = pinnedFirst;
   }
   if (pinned !== null) used[pinned] = true;
+
+  var sctx0 = schedCtx(o, n);
+  if (sctx0.anyWindow) {
+    var winSeq = [];
+    for (var wi = 0; wi < n; wi++) {
+      if (used[wi]) continue;
+      var ww = o.windows && o.windows[wi];
+      if (ww && ww.start !== null && ww.start !== undefined &&
+          ww.end !== null && ww.end !== undefined) winSeq.push(wi);
+    }
+    winSeq.sort(function (a, b) {
+      var d = o.windows[a].start - o.windows[b].start;
+      return d !== 0 ? d : a - b; /* stable */
+    });
+    for (var q = 0; q < winSeq.length; q++) {
+      order.push(winSeq[q]);
+      used[winSeq[q]] = true;
+      cur = winSeq[q];
+    }
+  }
 
   var target = (pinned === null) ? n : n - 1;
   while (order.length < target) {
@@ -1397,6 +1501,7 @@ var RouteCore = {
   remainingServiceMin: remainingServiceMin,
   minutesMatrix: minutesMatrix,
   simulateSchedule: simulateSchedule,
+  schedCtx: schedCtx,
   scheduleCost: scheduleCost,
   costLess: costLess,
   findEarlyArrivalOpportunity: findEarlyArrivalOpportunity,

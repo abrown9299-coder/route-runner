@@ -6,13 +6,13 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261005-174103">
+<meta name="app-version" content="20261005-184623">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" type="image/png" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20261005-174103">
+<link rel="stylesheet" href="styles.css?v=20261005-184623">
 <link rel="stylesheet" href="vendor/leaflet.css">
 <script>
 /* Stale-code gate: runs before anything else. If this HTML is stale
@@ -24,7 +24,7 @@
     var local = stamped ? stamped.getAttribute('content') : '';
     // Skip if this is already a cache-busted reload (avoid loops).
     if (/[?&]v=/.test(location.search)) return;
-    if (!local || local.indexOf('20261005-174103') !== -1) return; // dev, unstamped
+    if (!local || local.indexOf('20261005-184623') !== -1) return; // dev, unstamped
     fetch('version.json', { cache: 'no-store' }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (info) {
@@ -316,6 +316,31 @@
   </div>
 </div>
 
+<!-- Set-start/set-end chooser: one menu, three options -->
+<div id="setSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2 id="setTitle">Set beginning location</h2><button id="setClose" class="icon-btn">✕</button></div>
+    <button id="setGps" class="btn" style="width:100%">📍 Current location</button>
+    <button id="setSavedToggle" class="btn" style="width:100%;margin-top:8px">⭐ Saved locations</button>
+    <ul id="setSavedList" class="dd-list" hidden style="margin-top:8px"></ul>
+    <button id="setAdd" class="btn" style="width:100%;margin-top:8px">✏️ Add an address…</button>
+  </div>
+</div>
+
+<!-- Nickname popup for newly saved locations -->
+<div id="nickSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>⭐ Save location</h2><button id="nickCancel" class="icon-btn">✕</button></div>
+    <p class="fine">Give it a nickname so it's easy to pick later.</p>
+    <input id="nickInput" placeholder="Nickname (e.g. Home, Office)" autocomplete="off" style="width:100%">
+    <p id="nickAddr" class="fine"></p>
+    <div class="btn-row" style="margin-top:12px">
+      <button id="nickSave" class="btn primary">Save</button>
+      <button id="nickCancel2" class="btn secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- Confirm-stop time window popup -->
 <div id="winSheet" hidden>
   <div class="sheet">
@@ -493,9 +518,9 @@
   })();
 </script>
 <script src="vendor/Sortable.min.js"></script>
-<script src="core.js?v=20261005-174103"></script>
-<script src="ocr.js?v=20261005-174103"></script>
-<script src="install.js?v=20261005-174103"></script>
-<script src="app.js?v=20261005-174103"></script>
+<script src="core.js?v=20261005-184623"></script>
+<script src="ocr.js?v=20261005-184623"></script>
+<script src="install.js?v=20261005-184623"></script>
+<script src="app.js?v=20261005-184623"></script>
 </body>
 </html>

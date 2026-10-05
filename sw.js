@@ -1,5 +1,5 @@
-/* RouteRunner service worker — offline app shell. 20261005-174103 is stamped by dev/deploy.py. */
-const CACHE = 'routerunner-20261005-174103';
+/* RouteRunner service worker — offline app shell. 20261005-184623 is stamped by dev/deploy.py. */
+const CACHE = 'routerunner-20261005-184623';
 const SHELL = [
   './', './index.html', './styles.css', './app.js', './core.js', './ocr.js', './install.js',
   './manifest.json', './icon-192.png', './icon-512.png',
@@ -10,8 +10,64 @@ const SHELL = [
 const INSTALL_CACHES = ['routerunner-assets-v1', 'routerunner-tiles-v1'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(installDelta().then(() => self.skipWaiting()));
 });
+
+/* 2026-10-05: delta shell install — only files that actually changed are
+ * downloaded. Unchanged shell files are copied from the previous build's
+ * cache, keyed by the sha256 hashes in assets-manifest.json (written by
+ * dev/deploy.py from the deployed bytes). This build's hashes are stored in
+ * the cache under HASH_KEY for the next update. Any failure falls back to
+ * a full download so an update can never get stuck half-installed. */
+const HASH_KEY = '__shell-hashes__';
+function shellPathFor(url) {
+  return url === './' ? 'index.html' : url.replace(/^\.\//, '');
+}
+async function installDelta() {
+  const cache = await caches.open(CACHE);
+  let manifest = null;
+  try {
+    const res = await fetch('assets-manifest.json', { cache: 'no-store' });
+    if (res.ok) manifest = await res.json();
+  } catch (err) { /* offline on install — full download below */ }
+  const newHashes = {};
+  ((manifest && manifest.shell) || []).forEach((s) => { newHashes[s.path] = s.sha256; });
+
+  const keys = await caches.keys();
+  const prevKey = keys.find((k) => k !== CACHE && k.indexOf('routerunner-') === 0 && !INSTALL_CACHES.includes(k));
+  let prev = null, prevHashes = null;
+  if (prevKey) {
+    try {
+      prev = await caches.open(prevKey);
+      const hr = await prev.match(HASH_KEY);
+      if (hr) prevHashes = await hr.json();
+    } catch (err) { prev = null; prevHashes = null; }
+  }
+
+  try {
+    if (prev && prevHashes && Object.keys(newHashes).length) {
+      await Promise.all(SHELL.map(async (url) => {
+        const path = shellPathFor(url);
+        if (prevHashes[path] && newHashes[path] && prevHashes[path] === newHashes[path]) {
+          const hit = await prev.match(url);
+          if (hit) { await cache.put(url, hit); return; }
+        }
+        const res = await fetch(new Request(url, { cache: 'no-store' }));
+        if (!res.ok) throw new Error('shell fetch failed: ' + url + ' (' + res.status + ')');
+        await cache.put(url, res);
+      }));
+    } else {
+      await cache.addAll(SHELL); // first install or no hash history — full download
+    }
+  } catch (err) {
+    // Delta failed mid-way: fall back to a full download so the new cache
+    // is complete. addAll is atomic-ish (rejects on any failure → install
+    // retries on next SW update).
+    await cache.addAll(SHELL);
+  }
+  await cache.put(HASH_KEY, new Response(JSON.stringify(newHashes),
+    { headers: { 'Content-Type': 'application/json' } }));
+}
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys()
     .then((ks) => Promise.all(ks
