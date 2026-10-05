@@ -38,6 +38,10 @@ body {
   line-height: 1.45;
 }
 
+/* iOS Safari auto-zooms when a focused form control is < 16px.
+   Keep every text-like control at 16px minimum. */
+input[type=text], input[type=time], input[type=number], input:not([type]), select, textarea { font-size: 16px; }
+
 /* Header */
 #topbar {
   position: sticky; top: 0; z-index: 20;
@@ -301,7 +305,7 @@ li.stop.confirmed { border-left: 3px solid var(--amber); }
 .svc-row .svc-name { flex: 1; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .svc-row .svc-name small { color: var(--dim); }
 .svc-row select, .set-row select {
-  font-size: 14px; padding: 8px; border-radius: 10px;
+  font-size: 16px; padding: 8px; border-radius: 10px; /* 16px: no iOS auto-zoom */
   border: 1px solid var(--line); background: var(--card2); color: var(--text);
 }
 button.link { background: none; border: none; color: var(--accent); font-size: 13px; cursor: pointer; padding: 8px; }
