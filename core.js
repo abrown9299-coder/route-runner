@@ -11,6 +11,8 @@
  *   buildHaversineMatrix(points) -> n x n mile matrix
  *   optimizeOrder(matrix, {start, first, last}) -> index order (NN + 2-opt; `first` pinned right after start, `last` pinned at end)
  *   optimizeOrder opts (v1.9): {windows, durMin, source, departMin, serviceMin, bufferMin}
+ *   optimizeOrder opts (2026-10-06): + seedOrder — current route order used
+ *     as a second 2-opt seed; ties prefer it, making re-optimize idempotent.
  *     windows[i] = null | {start, end} arrival window in minutes-from-midnight;
  *     effective deadline is end - bufferMin (30). Early arrival waits.
  *   simulateSchedule(order, durMin, schedCtx) -> {legs, driveMin, violations}
@@ -1132,24 +1134,49 @@ function optimizeOrder(matrix, opts) {
   var better = useWindows
     ? function (a, b) { return costLess(a, b); }
     : function (a, b) { return a < b - 1e-9; };
-  var curCost = costOf(order);
-  var improved = true;
-  while (improved) {
-    improved = false;
-    for (i = lo; i < endExclusive - 1 && !improved; i++) {
-      for (var j = i + 1; j < endExclusive; j++) {
-        var cand = order.slice();
-        for (var a = i, b = j; a < b; a++, b--) {
-          var tmp = cand[a]; cand[a] = cand[b]; cand[b] = tmp;
-        }
-        var cc = costOf(cand);
-        if (better(cc, curCost)) {
-          for (q = 0; q < cand.length; q++) order[q] = cand[q];
-          curCost = cc;
-          improved = true;
-          break;
+  /* 2-opt improvement in place from a seed order; returns the final cost.
+   * Keeps start fixed at 0, the pinned-first stop at position 1, and the
+   * pinned-last stop at the end. */
+  var improve = function (ord) {
+    var curCost = costOf(ord);
+    var improved = true;
+    while (improved) {
+      improved = false;
+      for (var ii = lo; ii < endExclusive - 1 && !improved; ii++) {
+        for (var j = ii + 1; j < endExclusive; j++) {
+          var cand = ord.slice();
+          for (var a = ii, b = j; a < b; a++, b--) {
+            var tmp = cand[a]; cand[a] = cand[b]; cand[b] = tmp;
+          }
+          var cc = costOf(cand);
+          if (better(cc, curCost)) {
+            for (var q2 = 0; q2 < cand.length; q2++) ord[q2] = cand[q2];
+            curCost = cc;
+            improved = true;
+            break;
+          }
         }
       }
+    }
+    return curCost;
+  };
+  var bestCost = improve(order); /* nearest-neighbor seed lineage */
+  /* 2026-10-06 idempotency: also seed 2-opt with the caller's current order
+   * (o.seedOrder, e.g. the already-optimized route). The better lineage wins;
+   * ties prefer the seed, so re-optimizing a stable route is a no-op and the
+   * result never regresses vs the order the user already sees. */
+  var seed = o.seedOrder;
+  if (seed && seed.length === n) {
+    var seen = {}, okSeed = true;
+    for (var sd = 0; sd < n; sd++) {
+      var sv = seed[sd];
+      if (sv === null || sv === undefined || sv < 0 || sv >= n || seen[sv]) { okSeed = false; break; }
+      seen[sv] = true;
+    }
+    if (okSeed) {
+      var seedOrd = seed.slice();
+      var seedCost = improve(seedOrd);
+      if (!better(bestCost, seedCost)) { order = seedOrd; }
     }
   }
   if (useWindows) order = repairWindows(order, durMin, sctx, lo, endExclusive);
@@ -1217,7 +1244,7 @@ function optimizeRouteAsync(points, opts) {
       start: startIdx, first: firstIdx, last: lastIdx,
       windows: o.windows, durMin: durMin, source: r.source,
       departMin: o.departMin, serviceMin: o.serviceMin, bufferMin: o.bufferMin,
-      trafficFn: o.trafficFn, pointCoords: pointCoords
+      trafficFn: o.trafficFn, pointCoords: pointCoords, seedOrder: o.seedOrder
     });
     var sctx = schedCtx({ windows: o.windows, departMin: o.departMin,
                           serviceMin: o.serviceMin, bufferMin: o.bufferMin,
@@ -1383,6 +1410,53 @@ function makeTtlCache(storageKey, ttlMs, maxEntries, store, opts) {
   };
 }
 
+/* Point-order key for a matrix: coordinates rounded to 4 decimals, IN ORDER
+ * (unlike matrixCacheKey, which sorts). Stored alongside the cached matrix
+ * so a hit can be remapped to the caller's current point order. */
+function matrixOrderKey(points) {
+  return (points || []).map(function (p) {
+    var lat = p && p.lat != null ? Number(p.lat) : NaN;
+    var lng = p && p.lng != null ? Number(p.lng) : NaN;
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    return lat.toFixed(4) + ',' + lng.toFixed(4);
+  });
+}
+
+/* Remap a cached matrix (rows/cols in `hit.order`) to the current points
+ * order. Returns the remapped matrix, or null when it can't be aligned
+ * (legacy entry without order, unmatched points) — the caller refetches. */
+function remapMatrixToOrder(hit, points) {
+  var m = hit && hit.matrix;
+  var cachedOrder = hit && hit.order;
+  var cur = matrixOrderKey(points);
+  var n = cur.length;
+  if (!m || !cachedOrder || cachedOrder.length !== n || m.length !== n) return null;
+  for (var i = 0; i < n; i++) {
+    if (!m[i] || m[i].length !== n) return null;
+  }
+  /* perm[i] = cached index for current point i (stable against duplicates:
+   * each cached slot is used at most once). */
+  var used = {}, perm = [];
+  for (var c = 0; c < n; c++) {
+    var key = cur[c], found = -1;
+    if (key) {
+      for (var k = 0; k < n; k++) {
+        if (!used[k] && cachedOrder[k] === key) { found = k; break; }
+      }
+    }
+    if (found < 0) return null;
+    used[found] = true;
+    perm.push(found);
+  }
+  var out = [];
+  for (var a = 0; a < n; a++) {
+    var row = [];
+    for (var b = 0; b < n; b++) row.push(m[perm[a]][perm[b]]);
+    out.push(row);
+  }
+  return out;
+}
+
 /* OSRM matrix with a client-side cache (CODING_RULES §6: matrices 1h).
  * cache: a makeTtlCache whose values are {matrix, source} as returned by
  * buildDurationMatrix. Cache hits skip the network entirely. Only real
@@ -1394,10 +1468,19 @@ function cachedDurationMatrix(points, fetchFn, cache) {
   var sig = matrixCacheKey(points);
   var hit = null;
   if (cache && sig) { try { hit = cache.get(sig); } catch { hit = null; } }
-  if (hit && hit.matrix) return Promise.resolve(hit);
+  /* The cache key is order-independent (sorted coords), but matrix rows
+   * follow the point order at fetch time. Remap the hit to the CURRENT
+   * order — 2026-10-06: without this, re-optimizing after state.stops was
+   * rewritten in optimized order solves a misaligned matrix and the route
+   * flip-flops on every press. */
+  if (hit && hit.matrix) {
+    var remapped = remapMatrixToOrder(hit, points);
+    if (remapped) return Promise.resolve({ matrix: remapped, source: hit.source });
+    /* can't align (e.g. legacy entry) — fall through to refetch below */
+  }
   return buildDurationMatrix(points, fetchFn).then(function (r) {
     if (cache && sig && r && r.source === 'osrm') {
-      try { cache.set(sig, r); } catch { /* cache is best-effort */ }
+      try { cache.set(sig, { matrix: r.matrix, source: r.source, order: matrixOrderKey(points) }); } catch { /* cache is best-effort */ }
     }
     return r;
   });
@@ -1702,7 +1785,6 @@ var RouteCore = {
   optimizeRouteAsync: optimizeRouteAsync,
   normalizeGeocodeKey: normalizeGeocodeKey,
   parallelLimit: parallelLimit,
-  matrixCacheKey: matrixCacheKey,
   makeTtlCache: makeTtlCache,
   ensureGeocodeNeeded: ensureGeocodeNeeded,
   buildMapsLinks: buildMapsLinks,
@@ -1718,6 +1800,9 @@ var RouteCore = {
   formatClock: formatClock,
   remainingServiceMin: remainingServiceMin,
   minutesMatrix: minutesMatrix,
+  matrixCacheKey: matrixCacheKey,
+  matrixOrderKey: matrixOrderKey,
+  remapMatrixToOrder: remapMatrixToOrder,
   simulateSchedule: simulateSchedule,
   schedCtx: schedCtx,
   scheduleCost: scheduleCost,
