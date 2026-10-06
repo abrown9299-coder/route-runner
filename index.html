@@ -6,13 +6,13 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261005-195952">
+<meta name="app-version" content="20261006-015154">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" type="image/png" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20261005-195952">
+<link rel="stylesheet" href="styles.css?v=20261006-015154">
 <link rel="stylesheet" href="vendor/leaflet.css">
 <script>
 /* Stale-code gate: runs before anything else. If this HTML is stale
@@ -24,7 +24,7 @@
     var local = stamped ? stamped.getAttribute('content') : '';
     // Skip if this is already a cache-busted reload (avoid loops).
     if (/[?&]v=/.test(location.search)) return;
-    if (!local || local.indexOf('20261005-195952') !== -1) return; // dev, unstamped
+    if (!local || local.indexOf('20261006-015154') !== -1) return; // dev, unstamped
     fetch('version.json', { cache: 'no-store' }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (info) {
@@ -193,32 +193,6 @@
       <option value="work">Work</option><option value="personal">Personal</option>
     </select></label>
     <p class="fine" id="modeHint">Work profile: confirmed windows, check-in, notes, job types.</p>
-    <label class="set-row"><span>Home location <small>(optional — override GPS for searches)</small></span>
-      <span style="display:flex;gap:8px;align-items:center;position:relative">
-        <span style="flex:1;position:relative">
-          <input id="setHome" placeholder="e.g. Austin, TX" style="width:100%" autocomplete="off">
-          <ul id="setHomeSuggest" hidden></ul>
-        </span>
-        <button id="setHomeGps" class="btn ghost" title="Use current location">📡</button>
-        <button id="setHomeClear" class="btn ghost" title="Clear">✕</button>
-      </span></label>
-    <p class="fine" id="homeLocationDisplay"></p>
-    <label class="set-row"><span>Default start address <small>(blank = GPS)</small></span>
-      <span style="display:flex;gap:8px;align-items:center;position:relative">
-        <span id="setStartWrap" style="flex:1;position:relative">
-          <input id="setStart" placeholder="e.g. 123 Main St" style="width:100%" autocomplete="off">
-          <ul id="setStartSuggest" hidden></ul>
-        </span>
-        <button id="setStartGps" class="btn ghost" title="Use current location">📡</button>
-      </span></label>
-    <label class="set-row"><span>Default end address <small>(home — after last stop)</small></span>
-      <span style="display:flex;gap:8px;align-items:center;position:relative">
-        <span id="setEndWrap" style="flex:1;position:relative">
-          <input id="setEnd" placeholder="e.g. 456 Oak Ave" style="width:100%" autocomplete="off">
-          <ul id="setEndSuggest" hidden></ul>
-        </span>
-        <button id="setEndGps" class="btn ghost" title="Use current location">📡</button>
-      </span></label>
     <label class="set-row check" id="setAutoCheckinRow"><span>Auto check-in at stops <small>(Work: GPS proximity)</small></span><input id="setAutoCheckin" type="checkbox"></label>
     <label class="set-row check" id="setAutoConfirmRow"><span>Auto-confirm all stops <small>(Work: uses screenshot times)</small></span><input id="setAutoConfirm" type="checkbox"></label>
     <label class="set-row check"><span>Suggest early-arrival shortcuts <small>(saves drive time)</small></span><input id="setEarlySuggest" type="checkbox"></label>
@@ -226,20 +200,11 @@
     <label class="set-row check"><span>Avoid highways</span><input id="setHwy" type="checkbox"></label>
     <label class="set-row check"><span>Return to start at end</span><input id="setReturn" type="checkbox"></label>
     <label class="set-row check"><span>Save route history</span><input id="setHistory" type="checkbox"></label>
-    <div class="set-sec">
-      <h3>Traffic learning</h3>
-      <p class="fine">Anonymized: coarse area (~7 mi) × 3-hour buckets only. No addresses, no precise locations.</p>
-      <div class="btn-row">
-        <button id="trafficExport" class="btn secondary">Export anonymous data</button>
-        <button id="trafficImport" class="btn secondary">Import traffic model</button>
-      </div>
-      <input id="trafficFile" type="file" accept=".json" hidden>
-      <p class="fine" id="trafficStatus"></p>
-    </div>
     <div class="set-sec" id="savedSec">
       <h3>⭐ Saved locations</h3>
       <p class="fine">Tap the ⭐ on any address to save it here. Saved places appear first in every address dropdown.</p>
       <ul id="savedList" class="saved-list"></ul>
+      <button id="addSavedBtn" class="btn secondary" style="width:100%;margin-top:8px">＋ Add location</button>
     </div>
     <div class="set-sec" id="svcSec">
       <h3>Service times</h3>
@@ -337,6 +302,25 @@
     <div class="btn-row" style="margin-top:12px">
       <button id="nickSave" class="btn primary">Save</button>
       <button id="nickCancel2" class="btn secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add saved location (settings): address + nickname, geocoded before save -->
+<div id="addSavedSheet" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><h2>⭐ Add saved location</h2><button id="addSavedClose" class="icon-btn">✕</button></div>
+    <p class="fine">Type an address (or pick from the list), give it a nickname, and it's saved for every address dropdown.</p>
+    <label class="set-row"><span>Address</span>
+      <span id="addSavedAddrWrap" style="flex:1;position:relative">
+        <input id="addSavedAddr" placeholder="Street address…" autocomplete="off" style="width:100%">
+        <ul id="addSavedSuggest" class="dd-list" hidden></ul>
+      </span></label>
+    <label class="set-row"><span>Nickname</span>
+      <input id="addSavedNick" placeholder="e.g. Home, Office" autocomplete="off" style="width:100%"></label>
+    <div class="btn-row" style="margin-top:16px">
+      <button id="addSavedSave" class="btn primary">Save location</button>
+      <button id="addSavedCancel" class="btn secondary">Cancel</button>
     </div>
   </div>
 </div>
@@ -518,9 +502,9 @@
   })();
 </script>
 <script src="vendor/Sortable.min.js"></script>
-<script src="core.js?v=20261005-195952"></script>
-<script src="ocr.js?v=20261005-195952"></script>
-<script src="install.js?v=20261005-195952"></script>
-<script src="app.js?v=20261005-195952"></script>
+<script src="core.js?v=20261006-015154"></script>
+<script src="ocr.js?v=20261006-015154"></script>
+<script src="install.js?v=20261006-015154"></script>
+<script src="app.js?v=20261006-015154"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 {
-  "manifestVersion": "20261005-195952",
-  "generatedAt": "2026-10-05T19:59:52.990711+00:00",
+  "manifestVersion": "20261006-015154",
+  "generatedAt": "2026-10-06T01:51:55.387002+00:00",
   "assets": [
     {
       "path": "vendor/leaflet.min.js",
@@ -56,23 +56,23 @@
   "shell": [
     {
       "path": "index.html",
-      "sha256": "2fba7f562f7c6195031f38431b72fbb4377ea56e25d7b3d766a4781e88cecb7d",
-      "bytes": 25240
+      "sha256": "c7d2ed29d335ab1469fd8198223428c44a68bf0c0149342998e12ecafaf154c8",
+      "bytes": 24232
     },
     {
       "path": "styles.css",
-      "sha256": "eafba260715bb1c1e0d4d90af6055b5d7f1a69411bd4745899b23dd0c433fa62",
-      "bytes": 23028
+      "sha256": "4c47ce2941f7a1946793d098fc3affe4e9954a1c1233999136b8becb0bded9d9",
+      "bytes": 23345
     },
     {
       "path": "app.js",
-      "sha256": "82d183c0bfb587fcdf863e0b7b50f85729bb3731cf9b3feb91de0f129abfabd6",
-      "bytes": 167725
+      "sha256": "20067d6c08c35a055c4bf40047f346df12188b566159d81ab62a9dc97c8d1710",
+      "bytes": 162891
     },
     {
       "path": "core.js",
-      "sha256": "35616084a35127dbd3a11ef0d337a49ea21cecc047c129082a35c51234fba99a",
-      "bytes": 62770
+      "sha256": "73af04007bd3fd760935e977ab5a9f5bc6b1e76bba6927a1205329b648a2100d",
+      "bytes": 66223
     },
     {
       "path": "ocr.js",

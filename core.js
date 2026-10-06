@@ -636,6 +636,68 @@ function recordTrafficSample(learnData, key, adjustment) {
   return learnData;
 }
 
+/* ---------- drive-away auto-complete (2026-10-05, six items item 2) ----------
+ * Pure window evaluator: does this reading window prove the tech drove away
+ * from the checked-in stop? `readings` are {at, d, accuracy, speed} with d =
+ * meters from the stop (newest last). All four gates must hold:
+ *  1. 5+ minutes of service (checkedInAtMs → nowMs > minServiceMs).
+ *  2. Last 4 readings all qualify: accuracy <= 75 m (null accuracy passes —
+ *     same gate as proximity check-in), no more than 90 s between readings.
+ *  3. All 4 readings > 150 m from the stop (>> GPS drift + the 100 m
+ *     auto-check-in radius), and distances are non-decreasing within the
+ *     worst accuracy tolerance — OR the window spans >= 60 s with the last
+ *     reading > 50 m farther than the first (sustained recession).
+ *  4. Independent speed signal: speed > 2.5 m/s on >= 2 readings, or the
+ *     implied speed (d[last]-d[first]) / dt > 2.5 m/s. 2.5 m/s ≈ 5.6 mph:
+ *     above brisk walking, below any driving. On iOS Safari coords.speed is
+ *     often null, so the implied-speed fallback is the primary signal there.
+ * A parked phone with drifting fixes cannot satisfy all four. */
+var DRIVE_AWAY_N = 4;          // consecutive qualifying readings required
+var DRIVE_AWAY_ACCURACY_M = 75;
+var DRIVE_AWAY_MIN_D_M = 150;  // must ALL be farther than this
+var DRIVE_AWAY_MAX_GAP_MS = 90000;
+var DRIVE_AWAY_SPEED_MPS = 2.5;
+var DRIVE_AWAY_RECEDE_M = 50;   // alt. recession: d[last]-d[first] over >= 60 s
+var DRIVE_AWAY_SPAN_MS = 60000;
+function driveAwayWindowFires(readings, checkedInAtMs, nowMs, minServiceMs) {
+  var minMs = (typeof minServiceMs === 'number' && isFinite(minServiceMs)) ? minServiceMs : 300000;
+  if (!Array.isArray(readings) || readings.length < DRIVE_AWAY_N) return false;
+  if (typeof nowMs !== 'number' || typeof checkedInAtMs !== 'number') return false;
+  if (!(nowMs - checkedInAtMs > minMs)) return false;
+  var win = readings.slice(-DRIVE_AWAY_N);
+  var maxAcc = 0;
+  for (var i = 0; i < win.length; i++) {
+    var r = win[i];
+    if (!r || typeof r.at !== 'number' || typeof r.d !== 'number') return false;
+    if (r.at > nowMs) return false;
+    if (i > 0 && (r.at < win[i - 1].at || r.at - win[i - 1].at > DRIVE_AWAY_MAX_GAP_MS)) return false;
+    // Null accuracy passes (same gate as proximity check-in); > 75 m rejects.
+    var acc = (typeof r.accuracy === 'number' && isFinite(r.accuracy)) ? r.accuracy : DRIVE_AWAY_ACCURACY_M;
+    if (acc > DRIVE_AWAY_ACCURACY_M) return false;
+    if (!(r.d > DRIVE_AWAY_MIN_D_M)) return false;
+    if (acc > maxAcc) maxAcc = acc;
+  }
+  // Sustained recession: monotonic within tolerance, or clearly receding.
+  var monotonic = true;
+  for (var j = 1; j < win.length; j++) {
+    if (win[j].d < win[j - 1].d - maxAcc) { monotonic = false; break; }
+  }
+  var spanMs = win[win.length - 1].at - win[0].at;
+  var receding = spanMs >= DRIVE_AWAY_SPAN_MS &&
+    (win[win.length - 1].d - win[0].d) > DRIVE_AWAY_RECEDE_M;
+  if (!monotonic && !receding) return false;
+  // Independent speed signal.
+  var fast = 0;
+  for (var k = 0; k < win.length; k++) {
+    var sp = win[k].speed;
+    if (typeof sp === 'number' && isFinite(sp) && sp > DRIVE_AWAY_SPEED_MPS) fast++;
+  }
+  if (fast >= 2) return true;
+  var dtS = spanMs / 1000;
+  if (dtS > 0 && (win[win.length - 1].d - win[0].d) / dtS > DRIVE_AWAY_SPEED_MPS) return true;
+  return false;
+}
+
 function serviceMinAt(ctx, i) {
   var s = ctx ? ctx.serviceMin : null;
   var v;
@@ -1510,6 +1572,7 @@ var RouteCore = {
   learnedTrafficFactorAt: learnedTrafficFactorAt,
   recordTrafficSample: recordTrafficSample,
   rainFactorFor: rainFactorFor,
+  driveAwayWindowFires: driveAwayWindowFires,
   geocodeSuffix: geocodeSuffix,
   photonBias: photonBias,
   classifyPrecision: classifyPrecision,

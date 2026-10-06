@@ -4,7 +4,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261005-195952';
+  const RR_BUILD = '20261006-015154';
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
   const LS_TRAFFIC = 'rr.traffic.learn.v1';
@@ -27,16 +27,15 @@
     lastSchedule: null,  // {at, arrivals: {stopId: arrivalMin}} from last optimize
     checkedIn: null,     // {stopId, startedAt} — currently being serviced (v1.9)
     returnActive: false, // return-to-start was baked into the current optimization
-    endActive: false, // default end address was baked into the current optimization
+    endActive: false, // the tripEnd end-address block was baked into the current optimization
     completedAt: null,   // timestamp when the last stop was marked done (auto-delete next day)
     locationPrecision: 'unknown', // 'precise' | 'approximate' | 'unknown' — from GPS accuracy
   };
   const settings = {
-    defaultStart: '', defaultEnd: '', avoidTolls: false, avoidHwy: false,
+    avoidTolls: false, avoidHwy: false,
     returnToStart: false, saveHistory: false, autoCheckin: false, autoConfirmAll: false, mode: 'work', // 'work' | 'personal'
     serviceTimes: { default: 45, byJobType: {}, known: [] },
     earlySuggest: true, // suggest early-arrival swaps that save drive time
-    homeLocation: null, // {city, state, lat, lng} — user's base area for geocode bias. Null = not set yet.
     savedLocations: [], // [{name, address, lat, lng}] — starred saved places
     customJobTypes: [], // user-added job types for the appointment dialog
   };
@@ -73,16 +72,8 @@
         }
         if (settings.mode !== 'work' && settings.mode !== 'personal') settings.mode = 'work';
       }
-      // Home location: optional manual override only. GPS is the source of
-      // truth — never default to any city, never prompt. If a stored value
-      // is malformed, fall back to null (unbiased).
-      var hl = settings.homeLocation;
-      var hlValid = hl && typeof hl === 'object' &&
-        typeof hl.city === 'string' && hl.city.trim() &&
-        typeof hl.state === 'string' && hl.state.trim();
-      if (!hlValid) {
-        settings.homeLocation = null;
-      }
+      // Home location removed 2026-10-05 (six items item 5): GPS is the
+      // source of truth for geocode bias; no manual override remains.
       const r = JSON.parse(localStorage.getItem(LS_ROUTE) || 'null');
       if (r) {
         state.stops = r.stops || [];
@@ -100,6 +91,7 @@
           state.optimized = false;
           state.lastSchedule = null;
           state.returnActive = false; state.endActive = false;
+          endResolved = null; // auto-deleted route leaves no stale end point
           state.checkedIn = null;
         }
         state.matrixSource = r.matrixSource || null;
@@ -136,9 +128,6 @@
       });
     } catch {
       settings.serviceTimes = { default: 45, byJobType: {}, known: [] };
-    }
-    if (settings.defaultStart && state.origin.type === 'gps' && !state.origin.lat) {
-      state.origin = { type: 'address', label: settings.defaultStart, lat: null, lng: null };
     }
     // Sanitize saved locations and custom job types (forward-migration safe).
     try {
@@ -569,16 +558,11 @@
       s.done = !s.done;
       if (s.done && state.checkedIn && state.checkedIn.stopId === s.id) {
         state.checkedIn = null; // service finished with the stop
+        clearDriveAway();
       }
       // Departure: start tracking the drive to the next stop for traffic learning.
       if (s.done) {
-        const next = state.stops.find((x) => !x.done && x.lat != null);
-        if (next) {
-          // free-flow estimate from the last schedule, if available
-          const ff = (state.lastSchedule && state.lastSchedule.driveTo &&
-            state.lastSchedule.driveTo[next.id]) || 15;
-          startLegTracking(next, ff);
-        }
+        trackDepartureLeg();
       } else {
         legTrack = null; // reopened — discard the leg
       }
@@ -620,6 +604,7 @@
     }
     else if (act === 'checkin') {
       const ci = state.checkedIn;
+      clearDriveAway(); // manual service change: a new window starts fresh
       if (ci && ci.stopId === s.id) {
         state.checkedIn = null;
         // Ending the service timer completes the stop, same as the checkmark.
@@ -658,7 +643,7 @@
       if (n !== null) { s.note = n.trim(); save(); render(); }
     }
     else if (act === 'del') {
-      if (state.checkedIn && state.checkedIn.stopId === s.id) state.checkedIn = null;
+      if (state.checkedIn && state.checkedIn.stopId === s.id) { state.checkedIn = null; clearDriveAway(); }
       const idx = state.stops.indexOf(s);
       state.stops.splice(idx, 1);
       // Last stop deleted: full cleanup so no stale schedule/summary survives.
@@ -671,6 +656,7 @@
         state.preDriveMin = null; state.preDriveSource = null;
         state.lastSchedule = null;
         state.returnActive = false; state.endActive = false;
+        endResolved = null; // no stale end point survives the cleanup
         state.geocoding = false;
         state.geocodeStatus = '';
         state.pinModeStopId = null;
@@ -803,17 +789,10 @@
   };
 
   /* ---------- add: search ---------- */
-  /* Geocode query suffix: GPS is the source of truth — when we have a fix,
-   * no city suffix is needed (coordinate bias handles it). The optional
-   * homeLocation override still appends its city for disambiguation. */
-  function homeSuffix() {
-    if (devicePos) return '';
-    return RouteCore.geocodeSuffix(settings.homeLocation);
-  }
-  /* Photon API bias params: GPS fix first, then homeLocation override,
-   * then no bias. Never hardcoded. */
+  /* Photon API bias params: live GPS fix when available, otherwise no bias.
+   * (homeLocation was removed 2026-10-05 — GPS is the source of truth.) */
   function photonBiasParams() {
-    const src = devicePos || settings.homeLocation;
+    const src = devicePos;
     const b = RouteCore.photonBias(src);
     return b ? '&lat=' + b.lat.toFixed(4) + '&lon=' + b.lon.toFixed(4) : '';
   }
@@ -1054,8 +1033,10 @@
   function openSetSheet(which) {
     setWhich = which;
     $('setTitle').textContent = which === 'start' ? 'Set beginning location' : 'Set ending location';
-    $('setSavedList').hidden = true;
     renderSetSavedList();
+    // Expand the saved list right away when there's something in it (item 1);
+    // the toggle still collapses it. Empty state stays hidden until asked.
+    $('setSavedList').hidden = !(settings.savedLocations && settings.savedLocations.length);
     $('setSheet').hidden = false;
   }
   function closeSetSheet() { $('setSheet').hidden = true; setWhich = null; }
@@ -1295,9 +1276,12 @@
     return false;
   }
 
-  // End coordinates for optimization (spec §1): tripEnd wins; falls back to
-  // legacy settings.defaultEnd. Returns null when unset (skipped silently).
+  // End coordinates for optimization (spec §1): tripEnd wins. Returns null
+  // when unset (skipped silently). endResolved is the map-facing mirror of
+  // the optimizer's end point (item 4) — refreshMap() must never derive map
+  // state from the geocode cache.
   let endCoordsCache = null, endCoordsFor = null;
+  let endResolved = null; // {lat, lng, label} | null — resolved end of the current optimization
   async function getEndCoords() {
     const tripEnd = RouteCore.normalizeEndpoint(state.tripEnd);
     if (tripEnd && tripEnd.lat != null) {
@@ -1317,19 +1301,7 @@
       }
       return null; // unlocatable: skipped silently
     }
-    // Legacy fallback: settings.defaultEnd.
-    const addr = (settings.defaultEnd || '').trim();
-    if (!addr) return null;
-    if (endCoordsCache && endCoordsFor === addr) return endCoordsCache;
-    const tmp = { street: addr, city: '', state: '', zip: '' };
-    const ok = await geocodeCensusOne(tmp).catch(() => false) ||
-               await geocodeNominatim(tmp).catch(() => false);
-    if (ok && tmp.lat != null) {
-      endCoordsCache = { lat: tmp.lat, lng: tmp.lng };
-      endCoordsFor = addr;
-      return endCoordsCache;
-    }
-    return null;
+    return null; // no end set
   }
 
   function getGps() {
@@ -1369,6 +1341,7 @@
         if (deviceDot && mapObj) deviceDot.setLatLng([devicePos.lat, devicePos.lng]);
         adoptDevicePos();
         noteLegPosition(devicePos); // traffic learning: stationary detection
+        driveAwayAtGps(pos); // drive-away auto-complete (no-op unless checked in)
       }, () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 });
     } catch {}
   }
@@ -1410,8 +1383,10 @@
     b.textContent = (devMode.active && devMode.pos) ? 'DEV · SIM GPS' : 'DEV';
   }
   /* Single entry point for virtual position writes (manual set + sim tick).
-   * Short-circuits when inactive: zero production behavior change. */
-  function devSetPos(lat, lng) {
+   * Short-circuits when inactive: zero production behavior change.
+   * speedMps: simulated speed (devSimTick passes the effective speed) so the
+   * drive-away speed gate can be exercised. */
+  function devSetPos(lat, lng, speedMps) {
     if (!devMode.active) return;
     if (!isFinite(lat) || !isFinite(lng)) return;
     devMode.pos = { lat, lng };
@@ -1425,6 +1400,10 @@
     noteLegPosition(devicePos); // traffic learning: stationary detection
     // Auto check-in against the virtual position (tests the 100m radius).
     checkProximityCheckin(lat, lng, 5);
+    // Drive-away auto-complete against the virtual position (tests the 4-gate trigger).
+    evaluateDriveAway(lat, lng, 5,
+      (typeof speedMps === 'number' && isFinite(speedMps)) ? speedMps : null,
+      Date.now());
   }
   /* Real GPS fixes route through here so a background fix can't clobber an
    * active override. Inactive: identical to a plain write.
@@ -1491,7 +1470,7 @@
     const wp = devMode.simWaypoints[devMode.simIdx];
     if (!wp) { devSimStop('Simulation complete'); return; }
     const next = devMoveToward(devMode.pos, wp, DEV_WALK_MPS * mult);
-    devSetPos(next.lat, next.lng);
+    devSetPos(next.lat, next.lng, DEV_WALK_MPS * mult);
     if (next.arrived) devMode.simIdx++;
     if (devMode.simIdx >= devMode.simWaypoints.length) { devSimStop('Simulation complete'); return; }
     const s = $('devSimStatus');
@@ -1616,15 +1595,12 @@
   const WEATHER_TTL_MS = 15 * 60 * 1000; // refresh every 15 min
   async function fetchWeather() {
     try {
-      // Location priority: live GPS > route origin > home location.
-      // No hardcoded city fallback — if none available, skip (assume dry).
-      const hl = settings.homeLocation;
+      // Location priority: live GPS > route origin. No hardcoded city
+      // fallback — if none available, skip (assume dry).
       const lat = devicePos ? devicePos.lat
-        : (state.origin.lat != null ? state.origin.lat
-        : (hl && typeof hl.lat === 'number' ? hl.lat : null));
+        : (state.origin.lat != null ? state.origin.lat : null);
       const lng = devicePos ? devicePos.lng
-        : (state.origin.lng != null ? state.origin.lng
-        : (hl && typeof hl.lng === 'number' ? hl.lng : null));
+        : (state.origin.lng != null ? state.origin.lng : null);
       if (lat == null || lng == null) {
         weatherCache = { precipMm: 0, fetchedAt: Date.now() };
         return weatherCache;
@@ -1670,6 +1646,17 @@
     return (departMin, lat, lng) => {
       return RouteCore.learnedTrafficFactorAt(departMin, isWeekend, combined, lat, lng) * rainF;
     };
+  }
+  /* Departure: start tracking the drive to the next undone stop for traffic
+   * learning. Free-flow estimate comes from the last schedule when
+   * available. Shared by manual completion and drive-away auto-complete. */
+  function trackDepartureLeg() {
+    const next = state.stops.find((x) => !x.done && x.lat != null);
+    if (next) {
+      const ff = (state.lastSchedule && state.lastSchedule.driveTo &&
+        state.lastSchedule.driveTo[next.id]) || 15;
+      startLegTracking(next, ff);
+    }
   }
   function startLegTracking(toStop, freeFlowMin) {
     if (!toStop || toStop.lat == null) return;
@@ -1952,10 +1939,10 @@
       let lastIdx = lastStop ? points.findIndex((p) => p._stopId === lastStop.id) : null;
       if (returnPt) lastIdx = points.length - 1; // the return always comes last
       // End address: pinned final destination after the last stop.
-      // tripEnd wins; legacy settings.defaultEnd as fallback. Skipped silently if unset.
+      // The tripEnd end block wins. Skipped silently if unset.
       let endPt = null;
       const tripEndSet = !!RouteCore.normalizeEndpoint(state.tripEnd);
-      if ((tripEndSet || settings.defaultEnd) && !returnPt) {
+      if (tripEndSet && !returnPt) {
         const ec = await getEndCoords();
         if (ec) {
           endPt = { lat: ec.lat, lng: ec.lng, _stopId: '__end' };
@@ -2010,6 +1997,11 @@
         state.matrixSource = source;
         state.returnActive = !!returnPt;
         state.endActive = !!endPt;
+        // Item 4: the map draws from the resolved end point, never the geocode cache.
+        const teNorm = RouteCore.normalizeEndpoint(state.tripEnd);
+        endResolved = endPt
+          ? { lat: endPt.lat, lng: endPt.lng, label: (teNorm && teNorm.label) || 'Home' }
+          : null;
         // Early-arrival suggestion: check if swapping a consecutive pair to
         // arrive early (<=30 min) at the next stop would save 10+ min driving.
         // The user decides — never auto-applies.
@@ -2265,46 +2257,13 @@
     } catch {}
   }
 
-  /* ---------- traffic model import/export ---------- */
+  /* ---------- traffic model (always-on, local-only learning) ----------
+   * Traffic learning is unconditional — there is no on/off toggle and no
+   * settings UI (removed 2026-10-05). Samples live in localStorage under
+   * LS_TRAFFIC, keyed by 3-hour bucket × 0.1° grid cell (coarse, anonymous).
+   * LS_TRAFFIC_MODEL / loadTrafficModel stay for models imported before the
+   * export/import UI was removed; makeTrafficFn merges them when present. */
   const LS_TRAFFIC_MODEL = 'rr.traffic.model.v1'; // imported aggregated model
-  function exportTrafficData() {
-    try {
-      const learn = loadTrafficLearn();
-      const buckets = learn.buckets || {};
-      const keys = Object.keys(buckets);
-      if (!keys.length) {
-        $('trafficStatus').textContent = 'No traffic data to export.';
-        return;
-      }
-      const text = JSON.stringify({ buckets }, null, 2);
-      const blob = new Blob([text], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'routerunner-traffic-' + Date.now() + '.json';
-      a.click();
-      URL.revokeObjectURL(url);
-      $('trafficStatus').textContent = `Exported ${keys.length} buckets.`;
-    } catch {
-      $('trafficStatus').textContent = 'Export failed.';
-    }
-  }
-  function importTrafficModel(file) {
-    const r = new FileReader();
-    r.onload = () => {
-      try {
-        const model = JSON.parse(r.result);
-        if (!model.buckets || typeof model.buckets !== 'object') throw new Error('bad model');
-        localStorage.setItem(LS_TRAFFIC_MODEL, JSON.stringify(model));
-        const n = Object.keys(model.buckets).length;
-        $('trafficStatus').textContent = `Imported model with ${n} buckets.`;
-        toast('Traffic model updated');
-      } catch {
-        $('trafficStatus').textContent = 'Invalid model file.';
-      }
-    };
-    r.readAsText(file);
-  }
   function loadTrafficModel() {
     try {
       const raw = localStorage.getItem(LS_TRAFFIC_MODEL);
@@ -2326,7 +2285,11 @@
     // pass the stop objects themselves — core.js stopLabel() builds the address text
     const ordered = remaining.slice();
     if (settings.returnToStart) ordered.push({ street: originLabel() });
-    else if (settings.defaultEnd) ordered.push({ street: settings.defaultEnd });
+    else {
+      // End block value (label, or lat,lng when that's all we have).
+      const te = RouteCore.normalizeEndpoint(state.tripEnd);
+      if (te) ordered.push({ street: te.lat != null ? te.lat.toFixed(5) + ',' + te.lng.toFixed(5) : te.label });
+    }
     const avoid = [];
     if (settings.avoidTolls) avoid.push('tolls');
     if (settings.avoidHwy) avoid.push('highways');
@@ -2369,10 +2332,10 @@
       online: navigator.onLine,
       settings: {
         mode: settings.mode,
-        defaultStart: settings.defaultStart || '',
-        defaultEnd: settings.defaultEnd || '',
-        defaultStartCoords: null, /* startCoordsCache was removed; always null */
-        defaultEndCoords: (typeof endCoordsCache !== 'undefined' && endCoordsCache) ? { lat: +endCoordsCache.lat.toFixed(6), lng: +endCoordsCache.lng.toFixed(6) } : null,
+        // Start/end live on the main UI blocks now (settings defaults removed
+        // 2026-10-05) — snapshot the actual endpoints.
+        tripStart: state.tripStart || null,
+        tripEnd: state.tripEnd || null,
         autoConfirmAll: !!settings.autoConfirmAll,
         returnToStart: !!settings.returnToStart,
       },
@@ -2503,6 +2466,7 @@
     if (collectJobTypes(state.stops)) save();
     state.warnSuppressed = false; // a shared route is a new route: warnings back on
     state.checkedIn = null; // service timer doesn't survive a shared route
+    clearDriveAway();
     state.optimized = false;
     history.replaceState(null, '', location.pathname + location.search);
     save(); render();
@@ -2728,9 +2692,9 @@
     if (state.returnActive && state.optimized && state.origin.lat != null) {
       pts.push({ lat: state.origin.lat, lng: state.origin.lng, _return: true });
     }
-    // default end address: show it as the final destination
-    if (state.endActive && state.optimized && endCoordsCache) {
-      pts.push({ lat: endCoordsCache.lat, lng: endCoordsCache.lng, _end: true });
+    // trip-end block: show the resolved end point as the final destination
+    if (state.endActive && state.optimized && endResolved) {
+      pts.push({ lat: endResolved.lat, lng: endResolved.lng, _end: true });
     }
     pts.forEach((s, i) => {
       const cls = 'pin-num' + (s.isLast ? ' last' : '') + (s.isFirst ? ' first' : '') + (s.done ? ' done' : '') + (s._return || s._end ? ' ret' : '');
@@ -2742,7 +2706,7 @@
       }).addTo(mapObj);
       if (!s._origin && !s._return && !s._end) m.bindPopup(esc(stopLabel(s)));
       if (s._return) m.bindPopup('↩ Return to start');
-      if (s._end) m.bindPopup('🏠 ' + esc(settings.defaultEnd || 'Home'));
+      if (s._end) m.bindPopup('🏠 ' + esc(endResolved && endResolved.label ? endResolved.label : 'Home'));
       mapLayers.push(m);
     });
     // Active route line: from your blue dot through remaining (not-done) stops only.
@@ -2791,8 +2755,10 @@
     geocodeInflight = null; // a clear must not leave a stale in-flight geocode
     state.warnSuppressed = false; // new route: at-risk warnings come back
     state.checkedIn = null;
+    clearDriveAway();
     state.lastSchedule = null;
     state.returnActive = false; state.endActive = false;
+    endResolved = null; // item 4: no stale end point survives a route clear
     $('mapWrap').hidden = true;
     $('mapToggle').textContent = '🗺 Map';
     wipeRouteData();
@@ -2849,10 +2815,86 @@
     if (best) {
       endLegTracking(best.id); // arrival: traffic learning
       state.checkedIn = { stopId: best.id, startedAt: Date.now(), auto: true };
+      clearDriveAway(); // new service: fresh window
       save(); render();
       toast('📍 Auto checked in — ' + serviceMinFor(best) + ' min service timer running');
       maybeAutoReopt('checkin');
     }
+  }
+  /* ---------- drive-away auto-complete (six items item 2, 2026-10-05) ----------
+   * Fires in BOTH work and personal modes whenever a check-in is active.
+   * The window evaluator (RouteCore.driveAwayWindowFires) demands all four
+   * gates: 5+ min of service, 4 consecutive ≤75 m-accuracy readings all
+   * >150 m from the stop, monotonic recession (or clearly receding), and an
+   * independent speed signal > 2.5 m/s. A parked phone with drifting fixes
+   * cannot satisfy all four. On fire, the manual check-out sequence runs:
+   * the stop is marked done, the leg to the next stop starts tracking
+   * (traffic learning), and the route re-optimizes. */
+  let driveAwayBuf = []; // ring of recent readings: {at, d, accuracy, speed}
+  let driveAwayPollId = null;
+  function clearDriveAway() { driveAwayBuf = []; }
+  function evaluateDriveAway(lat, lng, accuracy, speedMps, atMs) {
+    const ci = state.checkedIn;
+    if (!ci) { clearDriveAway(); return; }
+    const s = state.stops.find((x) => x.id === ci.stopId);
+    if (!s) { state.checkedIn = null; clearDriveAway(); return; } // stop deleted mid-service
+    if (s.done || typeof s.lat !== 'number' || typeof s.lng !== 'number') {
+      clearDriveAway();
+      return;
+    }
+    driveAwayBuf.push({
+      at: atMs,
+      d: haversineM(s.lat, s.lng, lat, lng),
+      accuracy: accuracy,
+      speed: speedMps,
+    });
+    if (driveAwayBuf.length > 16) driveAwayBuf.splice(0, driveAwayBuf.length - 16);
+    if (driveAwayBuf.length < 4) return;
+    // Dev sim: readings arrive seconds apart — waive the 5-minute minimum so
+    // the drive-away path is testable without wall-clock waiting. Production
+    // behavior is untouched (devMode never activates in normal use).
+    const minServiceMs = devMode.active ? 0 : 300000;
+    if (!RouteCore.driveAwayWindowFires(driveAwayBuf, ci.startedAt, atMs, minServiceMs)) return;
+    // Fire: exactly the manual check-out sequence, plus departure tracking.
+    state.checkedIn = null;
+    clearDriveAway();
+    s.done = true;
+    trackDepartureLeg();
+    if (state.stops.length && state.stops.every((x) => x.done)) {
+      state.completedAt = Date.now();
+    }
+    save(); render();
+    maybeAutoReopt('done');
+    toast('✅ Auto-completed — drove away from ' + stopLabel(s));
+  }
+  /* Route one GPS fix through the drive-away evaluator. Dev override wins
+   * when active so the simulator drives the test. */
+  function driveAwayAtGps(pos) {
+    if (!state.checkedIn) return;
+    if (devMode.active && devMode.pos) {
+      evaluateDriveAway(devMode.pos.lat, devMode.pos.lng, 5, null, Date.now());
+    } else if (pos && pos.coords) {
+      const sp = pos.coords.speed;
+      evaluateDriveAway(pos.coords.latitude, pos.coords.longitude,
+        pos.coords.accuracy,
+        (typeof sp === 'number' && isFinite(sp)) ? sp : null,
+        Date.now());
+    }
+  }
+  /* Background delivery: iOS suspends watchPosition when backgrounded, so a
+   * 60 s getCurrentPosition poll (same pattern as the auto-check-in fallback)
+   * plus a visibilitychange evaluation covers the checked-in state. No new
+   * permissions; the poll no-ops unless a check-in is active. */
+  function startDriveAwayWatch() {
+    if (driveAwayPollId != null || !('geolocation' in navigator)) return;
+    try {
+      driveAwayPollId = setInterval(() => {
+        if (!state.checkedIn) return;
+        navigator.geolocation.getCurrentPosition((pos) => {
+          driveAwayAtGps(pos);
+        }, () => {}, { enableHighAccuracy: true, maximumAge: 60000, timeout: 15000 });
+      }, 60000);
+    } catch {}
   }
   let proximityIntervalId = null;
   function startAutoCheckinWatch() {
@@ -2883,8 +2925,6 @@
 
   /* ---------- settings ---------- */
   $('settingsBtn').onclick = () => {
-    $('setStart').value = settings.defaultStart;
-    $('setEnd').value = settings.defaultEnd || '';
     $('setTolls').checked = settings.avoidTolls;
     $('setHwy').checked = settings.avoidHwy;
     $('setReturn').checked = settings.returnToStart;
@@ -2892,32 +2932,12 @@
     $('setAutoCheckin').checked = !!settings.autoCheckin;
     $('setAutoConfirm').checked = !!settings.autoConfirmAll;
     $('setEarlySuggest').checked = settings.earlySuggest !== false;
-    $('trafficStatus').textContent = '';
-    $('trafficExport').onclick = exportTrafficData;
-    $('trafficImport').onclick = () => $('trafficFile').click();
-    $('trafficFile').onchange = (e) => {
-      const f = e.target.files && e.target.files[0];
-      if (f) importTrafficModel(f);
-      e.target.value = '';
-    };
     $('setMode').value = settings.mode || 'work';
     updateModeHint();
     renderServiceTimes();
-    renderHomeLocationSetting();
     renderSavedLocations();
     $('settingsSheet').hidden = false;
   };
-  /* ---------- home location setting (Issue 1) ---------- */
-  function renderHomeLocationSetting() {
-    const hl = settings.homeLocation;
-    $('homeLocationDisplay').textContent = hl && hl.city
-      ? 'Current: ' + hl.city + (hl.state ? ', ' + hl.state : '')
-      : 'Not set — GPS is used when available.';
-    $('setHome').value = '';
-    $('setHome').placeholder = hl && hl.city
-      ? hl.city + (hl.state ? ', ' + hl.state : '')
-      : 'e.g. Austin, TX (optional override)';
-  }
   /* ---------- saved locations settings UI (spec §2) ---------- */
   function renderSavedLocations() {
     const ul = $('savedList');
@@ -2967,111 +2987,89 @@
       toast('Renamed');
     }
   });
-  let homeSuggestTimer = null, homeSuggestToken = 0;
-  $('setHome').addEventListener('input', (e) => {
-    clearTimeout(homeSuggestTimer);
-    const q = e.target.value.trim();
-    if (q.length < 2) { $('setHomeSuggest').hidden = true; return; }
-    homeSuggestTimer = setTimeout(() => searchHomeCity(q, ++homeSuggestToken, 'setHomeSuggest', 'setHome', (sel) => {
-      settings.homeLocation = sel;
-      save();
-      renderHomeLocationSetting();
-      toast('✓ Home location set to ' + sel.city + (sel.state ? ', ' + sel.state : ''));
-    }), 350);
-  });
-  /* City search via Photon: returns {city, state, lat, lng} candidates. */
-  async function searchHomeCity(q, myToken, listId, inputId, onPick) {
-    try {
-      const list = $(listId);
-      list.innerHTML = '';
-      const j = await fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) + '&limit=5')
-        .then((r) => r.json()).catch(() => null);
-      if (myToken !== homeSuggestToken) return;
-      list.innerHTML = '';
-      (j && j.features || []).forEach((f) => {
-        const p = f.properties || {};
-        const city = p.city || p.town || p.village || p.name || '';
-        const state = p.state || '';
-        if (!city) return;
-        const [lng, lat] = f.geometry.coordinates;
-        const label = city + (state ? ', ' + state : '');
-        const li = document.createElement('li');
-        li.innerHTML = '📍 <b>' + esc(label) + '</b>';
-        li.onclick = () => {
-          onPick({ city: city, state: state, lat: lat, lng: lng });
-          $(inputId).value = '';
-          list.hidden = true;
-        };
-        list.appendChild(li);
-      });
-      list.hidden = !list.children.length;
-    } catch { /* offline */ }
+
+  /* ---------- add saved location sheet (six items item 6, 2026-10-05) ----------
+   * "＋ Add location" in settings → address (shared dropdown) + nickname →
+   * geocode (ArcGIS score ≥ 80, then Nominatim with GPS bias) →
+   * toggleSavedLocation. Ungeocodable addresses are REFUSED ("Couldn't find
+   * that address") — coord-less saved locations break the address/coords
+   * keying. All rendered strings are esc()'d (XSS, §2). */
+  let addSavedPick = null; // {label, address, lat, lng} from the dropdown pick
+  function openAddSavedSheet() {
+    addSavedPick = null;
+    $('addSavedAddr').value = '';
+    $('addSavedNick').value = '';
+    $('addSavedSuggest').hidden = true;
+    $('addSavedSheet').hidden = false;
+    setTimeout(() => { try { $('addSavedAddr').focus(); } catch {} }, 50);
   }
-  $('setHomeGps').onclick = async () => {
-    if (!('geolocation' in navigator)) { toast('GPS not available'); return; }
-    toast('Getting your location…');
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-      try {
-        const lat = pos.coords.latitude.toFixed(4), lon = pos.coords.longitude.toFixed(4);
-        const r = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
-          { headers: { 'Accept': 'application/json' } });
-        const j = r.ok ? await r.json() : null;
-        const a = j && j.address ? j.address : null;
-        if (a) {
-          const city = a.city || a.town || a.village || '';
-          const state = a.state_code || a.state || '';
-          if (city) {
-            settings.homeLocation = {
-              city: city, state: state,
-              lat: pos.coords.latitude, lng: pos.coords.longitude,
-            };
-            save();
-            renderHomeLocationSetting();
-            toast('✓ Home location set to ' + city + (state ? ', ' + state : ''));
-            return;
-          }
-        }
-        toast('Could not determine city from GPS');
-      } catch { toast('Could not determine city from GPS'); }
-    }, () => toast('GPS not available'), { timeout: 10000 });
-  };
-  $('setHomeClear').onclick = () => {
-    settings.homeLocation = null;
-    save();
-    renderHomeLocationSetting();
-    toast('Home location cleared');
-  };
-  /* ---------- precision banner (Issue 2) ---------- */
-  $('precisionBannerClose').onclick = () => { $('precisionBanner').hidden = true; };
-  $('setStartGps').onclick = () => {
-    // Capture current GPS position and reverse-geocode it into the field,
-    // so "default start" becomes the office (or wherever you are now).
-    if (!('geolocation' in navigator)) { toast('GPS not available'); return; }
-    toast('Getting your location…');
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-      const lat = pos.coords.latitude.toFixed(6), lon = pos.coords.longitude.toFixed(6);
-      try {
-        const r = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
-          { headers: { 'Accept': 'application/json' } });
-        const j = r.ok ? await r.json() : null;
-        const a = j && j.address ? j.address : null;
-        if (a) {
-          const num = a.house_number || '', road = a.road || '',
-                city = a.city || a.town || a.village || '',
-                state = a.state_code || a.state || '', zip = a.postcode || '';
-          const line1 = [num, road].filter(Boolean).join(' ').trim();
-          const line2 = [city, [state, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ').trim();
-          const addr = [line1, line2].filter(Boolean).join(', ');
-          if (addr) { $('setStart').value = addr; toast('Start address set to current location'); return; }
-        }
-        toast('Could not find address for this location');
-      } catch { toast('Address lookup failed'); }
-    }, () => toast('Location unavailable'), { timeout: 10000 });
+  function closeAddSavedSheet() { $('addSavedSheet').hidden = true; addSavedPick = null; }
+  attachAddressDropdown('addSavedAddr', 'addSavedSuggest', 'addSavedAddrWrap', (v) => {
+    addSavedPick = {
+      label: v.label,
+      address: v.address || v.label,
+      lat: v.lat, lng: v.lng,
+    };
+    $('addSavedAddr').value = addSavedPick.address;
+    if (!$('addSavedNick').value.trim() && v.fromSaved) $('addSavedNick').value = v.label || '';
+  });
+  // A typed edit invalidates the picked coords — only a real pick carries them.
+  $('addSavedAddr').addEventListener('input', () => { addSavedPick = null; });
+  $('addSavedBtn').onclick = openAddSavedSheet;
+  $('addSavedClose').onclick = closeAddSavedSheet;
+  $('addSavedCancel').onclick = closeAddSavedSheet;
+  /* Geocode a raw address string: ArcGIS (score ≥ 80) → Nominatim (GPS bias).
+   * Returns {lat, lng} or null. Every fetch path is failure-guarded. */
+  async function geocodeAddressString(q) {
+    const tmp = { street: q, city: '', state: '', zip: '' };
+    try {
+      if (await geocodeArcGIS(tmp, q)) return { lat: tmp.lat, lng: tmp.lng };
+    } catch {}
+    try {
+      const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
+        encodeURIComponent(q) + photonBiasParams(), { headers: { 'Accept': 'application/json' } });
+      const j = await r.json();
+      if (j && j[0] && j[0].lat && j[0].lon) {
+        return { lat: parseFloat(j[0].lat), lng: parseFloat(j[0].lon) };
+      }
+    } catch {}
+    return null;
+  }
+  $('addSavedSave').onclick = async () => {
+    const btn = $('addSavedSave');
+    const q = $('addSavedAddr').value.trim();
+    if (!q) { toast('Enter an address first'); return; }
+    // Nickname falls back to the address, capped at the load sanitizer's
+    // 120 chars. Everything is esc()'d at render time (XSS, §2).
+    const nickname = $('addSavedNick').value.trim().slice(0, 120) || q.slice(0, 120);
+    btn.disabled = true;
+    try {
+      let lat = null, lng = null, address = q;
+      if (addSavedPick && typeof addSavedPick.lat === 'number' && typeof addSavedPick.lng === 'number') {
+        lat = addSavedPick.lat; lng = addSavedPick.lng; address = addSavedPick.address;
+      } else {
+        const g = await geocodeAddressString(q);
+        if (!g) { toast("Couldn't find that address"); return; }
+        lat = g.lat; lng = g.lng;
+      }
+      if (!isFinite(lat) || !isFinite(lng)) { toast("Couldn't find that address"); return; }
+      const loc = { name: nickname, address: address, lat: lat, lng: lng };
+      if (RouteCore.isSavedLocation(settings.savedLocations, loc)) {
+        toast('Already saved');
+        return;
+      }
+      const r = RouteCore.toggleSavedLocation(settings.savedLocations, loc);
+      settings.savedLocations = r.saved;
+      save(); renderSavedLocations(); render();
+      closeAddSavedSheet();
+      toast('⭐ Saved "' + nickname + '"');
+    } finally {
+      btn.disabled = false;
+    }
   };
 
-  /* Address autofill for the default start/end fields (Photon + Census exact match). */
+  /* ---------- precision banner (Issue 2) ---------- */
+  $('precisionBannerClose').onclick = () => { $('precisionBanner').hidden = true; };
   /* ---------- universal address dropdown (spec §3) ----------
    * attachAddressDropdown(inputEl, listEl, wrapEl, onSelect)
    * - Empty + focus → shows saved locations (⭐ rows) first.
@@ -3131,7 +3129,7 @@
         const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
           '&limit=6' + photonBiasParams()).then((r) => r.json()).catch(() => null);
         const censusP = hasHouseNum
-          ? fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=' + encodeURIComponent(q + homeSuffix()))
+          ? fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=' + encodeURIComponent(q))
               .then((r) => r.json()).catch(() => null)
           : Promise.resolve(null);
         const [pj, cj] = await Promise.all([photonP, censusP]);
@@ -3213,116 +3211,6 @@
     input._ddClose = close;
   }
 
-  function wireSettingsAutocomplete(inputId, listId, wrapId) {
-    let timer = null, tok = 0;
-    $(inputId).addEventListener('input', (e) => {
-      clearTimeout(timer);
-      const q = e.target.value.trim();
-      if (q.length < 4) { $(listId).hidden = true; return; }
-      const myToken = ++tok;
-      timer = setTimeout(async () => {
-        try {
-          const list = $(listId);
-          list.innerHTML = '';
-          const hasHouseNum = /^\d+\s+\S/.test(q);
-          // Run Photon and Census in parallel. Census is authoritative for
-          // house numbers — show a placeholder so the user knows it's coming.
-          let censusLi = null;
-          if (hasHouseNum) {
-            censusLi = document.createElement('li');
-            censusLi.innerHTML = '🔍 <i>Looking up exact address…</i>';
-            censusLi.style.opacity = '0.6';
-            list.appendChild(censusLi);
-          }
-          const photonP = fetch('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) +
-            '&limit=6' + photonBiasParams()).then((r) => r.json()).catch(() => null);
-          const censusP = hasHouseNum
-            ? fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=' + encodeURIComponent(q + homeSuffix()))
-                .then((r) => r.json()).catch(() => null)
-            : Promise.resolve(null);
-          const [pj, cj] = await Promise.all([photonP, censusP]);
-          // Stale response guard: if the user kept typing, drop this result.
-          if (myToken !== tok) return;
-          list.innerHTML = '';
-          // Nominatim exact match FIRST.
-          const nm = cj && cj[0];
-          if (nm && nm.address && nm.address.house_number) {
-            const a = nm.address;
-            const street = [(a.house_number || ''), (a.road || '')].filter(Boolean).join(' ');
-            const cleanAddr = [street, (a.city || a.town || a.village || ((settings.homeLocation && settings.homeLocation.city) || '')), 'TN ' + (a.postcode || '')].filter(Boolean).join(', ');
-            const li = document.createElement('li');
-            li.innerHTML = '✓ <b>' + esc(cleanAddr) + '</b><small>Exact address match</small>';
-            li.onclick = () => {
-              $(inputId).value = cleanAddr;
-              list.hidden = true;
-            };
-            list.appendChild(li);
-          }
-          (pj && pj.features || []).forEach((f) => {
-            const p = f.properties || {};
-            const label = [p.name, p.street, p.city, p.state, p.postcode].filter(Boolean)
-              .filter((v, i, a) => a.indexOf(v) === i).join(', ');
-            const li = document.createElement('li');
-            li.innerHTML = esc(label || 'Unnamed place') +
-              '<small>' + esc([p.city, p.state].filter(Boolean).join(', ')) + '</small>';
-            li.onclick = () => {
-              // Preserve the house number from the query if the result lacks one.
-              // Photon often returns street-only results; the user typed the number.
-              const qNum = (q.match(/^\d+/) || [])[0] || '';
-              let street = [p.housenumber, p.street].filter(Boolean).join(' ');
-              if (!street) street = [p.name, p.street].filter(Boolean).join(' ');
-              if (qNum && street && !new RegExp('^' + qNum + '\\b').test(street)) {
-                // Result has a street but no house number — prepend the typed one.
-                // Only if the street name matches what was typed (avoid wrong numbers).
-                const qStreet = q.replace(/^\d+\s+/, '').toLowerCase();
-                if (street.toLowerCase().includes(qStreet.split(' ')[0])) {
-                  street = qNum + ' ' + street;
-                }
-              }
-              const addr = [street, p.city,
-                            [p.state, p.postcode].filter(Boolean).join(' ')]
-                .filter(Boolean).join(', ');
-              $(inputId).value = addr || label;
-              list.hidden = true;
-            };
-            list.appendChild(li);
-          });
-          list.hidden = !list.children.length;
-        } catch { /* offline — suggestions unavailable */ }
-      }, 350);
-    });
-    document.addEventListener('click', (e) => {
-      if (!e.target.closest('#' + wrapId)) $(listId).hidden = true;
-    });
-  }
-  wireSettingsAutocomplete('setStart', 'setStartSuggest', 'setStartWrap');
-  wireSettingsAutocomplete('setEnd', 'setEndSuggest', 'setEndWrap');
-  $('setEndGps').onclick = () => {
-    // Capture current GPS position and reverse-geocode it into the end field,
-    // so "default end" becomes home (or wherever you're headed after work).
-    if (!('geolocation' in navigator)) { toast('GPS not available'); return; }
-    toast('Getting your location…');
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-      const lat = pos.coords.latitude.toFixed(6), lon = pos.coords.longitude.toFixed(6);
-      try {
-        const r = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
-          { headers: { 'Accept': 'application/json' } });
-        const j = r.ok ? await r.json() : null;
-        const a = j && j.address ? j.address : null;
-        if (a) {
-          const num = a.house_number || '', road = a.road || '',
-                city = a.city || a.town || a.village || '',
-                state = a.state_code || a.state || '', zip = a.postcode || '';
-          const line1 = [num, road].filter(Boolean).join(' ').trim();
-          const line2 = [city, [state, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ').trim();
-          const addr = [line1, line2].filter(Boolean).join(', ');
-          if (addr) { $('setEnd').value = addr; toast('End address set to current location'); return; }
-        }
-        toast('Could not find address for this location');
-      } catch { toast('Address lookup failed'); }
-    }, () => toast('Location unavailable'), { timeout: 10000 });
-  };
   function updateModeHint() {
     const h = $('modeHint');
     if (h) h.textContent = isWorkMode()
@@ -3342,8 +3230,6 @@
   });
   $('settingsClose').onclick = () => {
     const retBefore = settings.returnToStart;
-    settings.defaultStart = $('setStart').value.trim();
-    settings.defaultEnd = $('setEnd').value.trim();
     settings.avoidTolls = $('setTolls').checked;
     settings.avoidHwy = $('setHwy').checked;
     settings.returnToStart = $('setReturn').checked;
@@ -3356,6 +3242,7 @@
     if (settings.returnToStart !== retBefore) {
       // the route shape changed (return leg added/removed) — re-optimize needed
       state.optimized = false; state.returnActive = false; state.endActive = false;
+      endResolved = null;
     }
     save();
     if (settings.autoCheckin !== acBefore) {
@@ -3379,9 +3266,6 @@
       toast(settings.returnToStart
         ? 'Return to start on — tap ⚡ Optimize to rebuild the route'
         : 'Return to start off — tap ⚡ Optimize to rebuild the route');
-    }
-    if (settings.defaultStart && state.origin.type === 'gps' && !state.origin.lat) {
-      state.origin = { type: 'address', label: settings.defaultStart, lat: null, lng: null };
     }
     $('settingsSheet').hidden = true;
     render();
@@ -3467,7 +3351,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261005-195952' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261006-015154' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
@@ -3501,10 +3385,10 @@
   function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch {} }
   function ssDel(k) { try { sessionStorage.removeItem(k); } catch {} }
   function checkForUpdate() {
-    // Dev tree (unstamped 20261005-195952): version.json belongs to some other
+    // Dev tree (unstamped 20261006-015154): version.json belongs to some other
     // build — never "update" here, or the page reload-loops every ~30s.
     // Mirrors the stale-code gate in index.html.
-    if (!APP_VERSION || APP_VERSION === 'dev' || APP_VERSION.indexOf('20261005-195952') !== -1) return;
+    if (!APP_VERSION || APP_VERSION === 'dev' || APP_VERSION.indexOf('20261006-015154') !== -1) return;
     const now = Date.now();
     if (now - lastUpdateCheck < 30000) return; // throttle foreground checks
     lastUpdateCheck = now;
@@ -3585,6 +3469,9 @@
     if (settings.autoCheckin && isWorkMode()) startAutoCheckinWatch();
     // Live blue-dot tracking: keep the map's "you are here" dot moving.
     startDeviceTracking();
+    // Drive-away auto-complete delivery while checked in (both modes):
+    // 60 s poll + visibilitychange cover iOS background suspension.
+    startDriveAwayWatch();
     // Ask for location services right on launch: the permission prompt appears
     // immediately, and the map can show "you are here" before optimize runs.
     if (state.origin.type === 'gps' && state.origin.lat == null) {
@@ -3609,6 +3496,13 @@
           navigator.geolocation.getCurrentPosition((pos) => {
             checkinAtGps(pos);
           }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 15000 });
+        }
+        // Drive-away auto-complete on return: the same suspension applies
+        // while checked in — evaluate the fresh fix immediately.
+        if (state.checkedIn && 'geolocation' in navigator) {
+          navigator.geolocation.getCurrentPosition((pos) => {
+            driveAwayAtGps(pos);
+          }, () => {}, { enableHighAccuracy: true, maximumAge: 60000, timeout: 15000 });
         }
       } // reopened: fresh times + re-route
     });
