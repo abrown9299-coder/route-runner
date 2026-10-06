@@ -17,7 +17,14 @@
  *   minutesMatrix(matrix, source) -> drive-minute matrix parallel to matrix
  *   parseClockToMin("9:00 AM") -> 540 ; formatClock(540) -> "9:00 AM"
  *   buildDurationMatrix(points, fetchFn) -> Promise<{matrix, source}>
- *   optimizeRouteAsync(points, {startIdx, firstIdx, lastIdx, fetchFn}) -> Promise<{order, source}>
+ *   cachedDurationMatrix(points, fetchFn, cache) -> Promise<{matrix, source}>
+ *   optimizeRouteAsync(points, {startIdx, firstIdx, lastIdx, fetchFn, matrixCache})
+ *     -> Promise<{order, source}>
+ *   normalizeGeocodeKey(address) -> cache key for an address string
+ *   parallelLimit(items, limit, fn) -> Promise (≤limit tasks in flight)
+ *   matrixCacheKey(points) -> point-set signature string
+ *   makeTtlCache(storageKey, ttlMs, maxEntries, store, opts) -> TTL LRU cache
+ *   ensureGeocodeNeeded(stops, startEp, origin) -> bool (doOptimize skip guard)
  *   buildMapsLinks(originLabel, orderedStops, {avoid}) -> [{label, url}]
  *   encodeShare(payload) / decodeShare(str) -> shareable '#r=...' links
  */
@@ -1201,7 +1208,7 @@ function optimizeRouteAsync(points, opts) {
   var startIdx = (o.startIdx === undefined || o.startIdx === null) ? 0 : o.startIdx;
   var firstIdx = (o.firstIdx === undefined) ? null : o.firstIdx;
   var lastIdx = (o.lastIdx === undefined) ? null : o.lastIdx;
-  return buildDurationMatrix(points, o.fetchFn).then(function (r) {
+  return cachedDurationMatrix(points, o.fetchFn, o.matrixCache || null).then(function (r) {
     var durMin = minutesMatrix(r.matrix, r.source);
     var pointCoords = (points || []).map(function (p) {
       return p ? { lat: p.lat, lng: p.lng } : {};
@@ -1267,6 +1274,149 @@ function parseArcGisCandidates(json) {
   } catch {
     return null;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 6.8 Concurrency cap + TTL caches (perf spec 2026-10-05)              */
+/* ------------------------------------------------------------------ */
+
+/* Normalized cache key for an address string: trimmed, lowercased,
+ * internal whitespace collapsed. Cache keys never leave the device. */
+function normalizeGeocodeKey(address) {
+  return String(address == null ? '' : address).trim().toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/* Run fn over items with at most `limit` in flight at once.
+ * Resolves (undefined) when every item is done; rejects if any task
+ * rejects (Promise.all semantics). limit < 1 behaves as 1. */
+function parallelLimit(items, limit, fn) {
+  var queue = (items || []).slice();
+  var n = Math.max(1, Math.min(Math.floor(limit) || 1, queue.length));
+  function pump() {
+    var item = queue.shift();
+    if (item === undefined) return Promise.resolve();
+    return Promise.resolve().then(function () { return fn(item); }).then(pump);
+  }
+  var workers = [];
+  for (var i = 0; i < n; i++) workers.push(pump());
+  return Promise.all(workers).then(function () { return undefined; });
+}
+
+/* Point-set signature for the matrix cache: coordinates rounded to 4
+ * decimals (~11 m — absorbs GPS jitter) and sorted, so the same set of
+ * points in any order, or after a no-op edit, hits the same key. */
+function matrixCacheKey(points) {
+  var keys = (points || []).map(function (p) {
+    var lat = p && p.lat != null ? Number(p.lat) : NaN;
+    var lng = p && p.lng != null ? Number(p.lng) : NaN;
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    return lat.toFixed(4) + ',' + lng.toFixed(4);
+  }).filter(Boolean);
+  keys.sort();
+  return keys.join(';');
+}
+
+/* TTL key-value cache over an optional localStorage-shaped store.
+ * Pure apart from the injected `store` ({getItem,setItem,removeItem} or
+ * null for memory-only). One JSON blob under `storageKey`; entries are
+ * {v, ts}. LRU: reads/writes move the key to the newest end; the oldest
+ * entries are evicted past maxEntries. Every store access is guarded —
+ * iOS private mode throws, corrupt JSON is dropped, and the cache
+ * degrades to memory-only instead of breaking the caller.
+ * opts: {now: () -> ms (default Date.now), revive: (v) -> v applied on read} */
+function makeTtlCache(storageKey, ttlMs, maxEntries, store, opts) {
+  var o = opts || {};
+  var now = o.now || Date.now;
+  var revive = o.revive || null;
+  var cap = Math.max(1, Math.floor(maxEntries) || 1);
+  var entries = new Map();
+  function read(v) {
+    if (revive) { try { return revive(v); } catch { return v; } }
+    return v;
+  }
+  function persist() {
+    if (!store || !storageKey) return;
+    try { store.setItem(storageKey, JSON.stringify(Array.from(entries))); }
+    catch { /* private mode / quota — stay memory-only */ }
+  }
+  (function load() {
+    if (!store || !storageKey) return;
+    try {
+      var raw = store.getItem(storageKey);
+      if (!raw) return;
+      var arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return;
+      var t = now();
+      for (var i = 0; i < arr.length; i++) {
+        var k = arr[i][0], e = arr[i][1];
+        if (e && typeof e.ts === 'number' && t - e.ts <= ttlMs) entries.set(k, e);
+      }
+      while (entries.size > cap) entries.delete(entries.keys().next().value);
+    } catch { /* corrupt blob — start empty */ }
+  })();
+  function live(key) {
+    var e = entries.get(key);
+    if (!e) return null;
+    if (now() - e.ts > ttlMs) { entries.delete(key); persist(); return null; }
+    return e;
+  }
+  return {
+    get: function (key) {
+      var e = live(key);
+      if (!e) return null;
+      entries.delete(key); entries.set(key, e); /* LRU touch */
+      return read(e.v);
+    },
+    set: function (key, value) {
+      entries.delete(key);
+      entries.set(key, { v: value, ts: now() });
+      while (entries.size > cap) entries.delete(entries.keys().next().value);
+      persist();
+    },
+    has: function (key) { return !!live(key); },
+    clear: function () {
+      entries.clear();
+      if (store && storageKey) { try { store.removeItem(storageKey); } catch {} }
+    },
+    size: function () { return entries.size; },
+  };
+}
+
+/* OSRM matrix with a client-side cache (CODING_RULES §6: matrices 1h).
+ * cache: a makeTtlCache whose values are {matrix, source} as returned by
+ * buildDurationMatrix. Cache hits skip the network entirely. Only real
+ * OSRM results are stored — a haversine fallback is never cached, so a
+ * throttled demo server keeps getting retried on later edits (today's
+ * behavior). Store failures are swallowed; a dead cache is a pure
+ * slowdown, never an error. */
+function cachedDurationMatrix(points, fetchFn, cache) {
+  var sig = matrixCacheKey(points);
+  var hit = null;
+  if (cache && sig) { try { hit = cache.get(sig); } catch { hit = null; } }
+  if (hit && hit.matrix) return Promise.resolve(hit);
+  return buildDurationMatrix(points, fetchFn).then(function (r) {
+    if (cache && sig && r && r.source === 'osrm') {
+      try { cache.set(sig, r); } catch { /* cache is best-effort */ }
+    }
+    return r;
+  });
+}
+
+/* Pure skip-guard for doOptimize: true when ensureGeocoded would do real
+ * work — a stop missing coords, a labeled-but-unlocated start endpoint,
+ * or a legacy origin (GPS fix attempt / unlocated origin address).
+ * The end endpoint is located by getEndCoords (own single-entry cache),
+ * never by ensureGeocoded, so it is out of this guard's scope. */
+function ensureGeocodeNeeded(stops, startEp, origin) {
+  var ss = stops || [];
+  for (var i = 0; i < ss.length; i++) {
+    if (ss[i] && ss[i].lat == null) return true;
+  }
+  if (startEp) return !!(startEp.lat == null && startEp.label);
+  if (origin && origin.type === 'gps' && origin.lat == null) return true;
+  if (origin && origin.type === 'address' && origin.lat == null) return true;
+  return false;
 }
 
 /* Total drive minutes for `order` (array of point indices) over a matrix.
@@ -1548,7 +1698,13 @@ var RouteCore = {
   buildHaversineMatrix: buildHaversineMatrix,
   optimizeOrder: optimizeOrder,
   buildDurationMatrix: buildDurationMatrix,
+  cachedDurationMatrix: cachedDurationMatrix,
   optimizeRouteAsync: optimizeRouteAsync,
+  normalizeGeocodeKey: normalizeGeocodeKey,
+  parallelLimit: parallelLimit,
+  matrixCacheKey: matrixCacheKey,
+  makeTtlCache: makeTtlCache,
+  ensureGeocodeNeeded: ensureGeocodeNeeded,
   buildMapsLinks: buildMapsLinks,
   encodeShare: encodeShare,
   decodeShare: decodeShare,

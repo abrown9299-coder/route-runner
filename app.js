@@ -4,8 +4,14 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261006-015154';
+  const RR_BUILD = '20261006-040301';
   const $ = (id) => document.getElementById(id);
+  // Anonymous stats (app/stats.js, loaded before this file): safe wrappers —
+  // stats.js may fail to load or self-disable (dev build), and Stats never
+  // throws by contract. Breadcrumbs are fixed allowlist names only (no data).
+  const Stats = (typeof window !== 'undefined' && window.Stats) || null;
+  const _crumb = (n) => { try { if (Stats) Stats.crumb(n); } catch {} };
+  const _event = (t, m) => { try { if (Stats) Stats.trackEvent(t, m); } catch {} };
   const LS_ROUTE = 'rr.route.v1', LS_SET = 'rr.settings.v1', LS_HIST = 'rr.history.v1';
   const LS_TRAFFIC = 'rr.traffic.learn.v1';
 
@@ -270,6 +276,10 @@
    * (debounced so rapid edits collapse into one routing call). Replaces the
    * haversine guess once the OSRM duration matrix arrives. */
   let preDriveTimer = null, preDriveToken = 0;
+  // Point-set signature of the last successful OSRM pre-drive fetch — edits
+  // that don't move points (pin, reorder, done) skip the refetch entirely.
+  // Only set on OSRM success: a throttled demo server keeps retrying later.
+  let lastPreDriveSig = null;
   function schedulePreDriveTime() {
     if (preDriveTimer) clearTimeout(preDriveTimer);
     preDriveTimer = setTimeout(refreshPreDriveTime, 2000);
@@ -279,11 +289,14 @@
     if (state.optimized) return;
     const pts = locatedPoints();
     if (pts.length < 2) return;
+    const sig = RouteCore.matrixCacheKey(pts);
+    if (sig === lastPreDriveSig) return; // points unchanged — no refetch
     const my = ++preDriveToken;
     try {
-      const r = await RouteCore.buildDurationMatrix(pts, fetch.bind(window));
+      const r = await RouteCore.cachedDurationMatrix(pts, fetch.bind(window), matrixCache);
       if (my !== preDriveToken || state.optimized) return; // superseded
-      if (r.source !== 'osrm') return; // haversine fallback adds nothing new
+      if (r.source !== 'osrm') { _crumb('predrive_osrm_fallback'); return; } // haversine fallback adds nothing new
+      lastPreDriveSig = sig;
       state.preDriveMin = RouteCore.routeMinutesForOrder(
         r.matrix, pts.map((_, i) => i), 'osrm');
       state.preDriveSource = 'osrm';
@@ -297,7 +310,7 @@
     if (action) {
       const b = document.createElement('button');
       b.textContent = action.label;
-      b.onclick = () => { action.fn(); t.hidden = true; };
+      b.onclick = () => { if (action.label === 'Undo') _crumb('undoing_action'); action.fn(); t.hidden = true; };
       t.appendChild(b);
     }
     t.hidden = false;
@@ -326,6 +339,11 @@
     li.className = 'stop endpoint-row' + (isStart ? '' : ' end-row');
     li.dataset.endpoint = which;
     const title = isStart ? 'Beginning location' : 'Ending location';
+    // Perf/UX spec 2026-10-05: the set button is redundant once the endpoint
+    // is fully set (row-body tap already opens the chooser). It stays visible
+    // for unset endpoints AND for the "📍 no location — tap set" chip state
+    // (label but no coords) so the chip text stays literal.
+    const setVisible = !disp || disp.lat == null;
     li.innerHTML =
       '<span class="num">' + (isStart ? '▶' : '■') + '</span>' +
       '<div class="info"><div class="addr">' + esc(disp ? disp.label : title) + '</div>' +
@@ -335,8 +353,10 @@
           : '<span class="chip warn">not set</span>') +
       '</div></div>' +
       '<div class="acts">' +
-        '<button class="pill set-btn" data-act="set-endpoint" data-which="' + which + '" title="Set the ' +
-          (isStart ? 'beginning' : 'ending') + ' location">set</button>' +
+        (setVisible
+          ? '<button class="pill set-btn" data-act="set-endpoint" data-which="' + which + '" title="Set the ' +
+            (isStart ? 'beginning' : 'ending') + ' location">set</button>'
+          : '') +
         '<button class="star-btn' + (saved ? ' on' : '') + '" data-act="star-endpoint" data-which="' + which + '" title="' +
           (saved ? 'Unsave this location' : 'Save this location') + '">' + (saved ? '⭐' : '☆') + '</button>' +
         (disp ? '<button data-act="clear-endpoint" data-which="' + which + '" title="Clear">✕</button>' : '') +
@@ -369,12 +389,17 @@
   }
 
   /* ---------- render ---------- */
+  // Route-list open tracking (stats): the stop list is the route list; it
+  // "opens" when it transitions from empty to having stops.
+  let routeListWasOpen = false;
   function render() {
     $('routeDate').textContent = new Date().toLocaleDateString(undefined,
       { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
     $('originLabel').textContent = state.origin.label || 'Current location';
 
     const total = state.stops.length;
+    if (total > 0 && !routeListWasOpen) _crumb('opening_route_list');
+    routeListWasOpen = total > 0;
     const done = state.stops.filter((s) => s.done).length;
     $('progressText').textContent = done + '/' + total;
     $('progressRing').style.strokeDashoffset = total
@@ -550,6 +575,7 @@
     const s = state.stops.find((x) => x.id === li.dataset.id);
     if (!s) return;
     if (!btn) { // tapped body — if needs pin, enter pin mode
+      _crumb('selecting_stop');
       if (s.lat == null) openMapForPin(s.id);
       return;
     }
@@ -563,6 +589,7 @@
       // Departure: start tracking the drive to the next stop for traffic learning.
       if (s.done) {
         trackDepartureLeg();
+        _event('stop_completed', {});
       } else {
         legTrack = null; // reopened — discard the leg
       }
@@ -610,6 +637,7 @@
         // Ending the service timer completes the stop, same as the checkmark.
         if (!s.done) {
           s.done = true;
+          _event('stop_completed', {});
           toast('✅ Service done — on to the next stop');
           if (state.stops.length && state.stops.every((x) => x.done)) {
             state.completedAt = Date.now();
@@ -622,6 +650,8 @@
         // Arrival: end the tracked leg (traffic learning).
         endLegTracking(s.id);
         state.checkedIn = { stopId: s.id, startedAt: Date.now() };
+        _crumb('checking_in');
+        _event('check_in', {});
         toast('⏳ Checked in — ' + serviceMinFor(s) + ' min service timer running');
       }
       save(); render();
@@ -640,12 +670,13 @@
     }
     else if (act === 'note') {
       const n = prompt('Note for this stop:', s.note || '');
-      if (n !== null) { s.note = n.trim(); save(); render(); }
+      if (n !== null) { s.note = n.trim(); save(); render(); _crumb('editing_stop'); }
     }
     else if (act === 'del') {
       if (state.checkedIn && state.checkedIn.stopId === s.id) { state.checkedIn = null; clearDriveAway(); }
       const idx = state.stops.indexOf(s);
       state.stops.splice(idx, 1);
+      _crumb('deleting_stop');
       // Last stop deleted: full cleanup so no stale schedule/summary survives.
       // (The drive summary must disappear when the route is empty.)
       if (!state.stops.length) {
@@ -759,6 +790,7 @@
     s.confirmed = true; s.twStart = st; s.twEnd = en;
     closeWindowPopup();
     save(); render();
+    _crumb('editing_appointment');
     toast((was ? '✓ Window updated ' : '✓ Window confirmed ') +
       RouteCore.formatClock(st) + '–' + RouteCore.formatClock(en));
     maybeAutoReopt('window'); // re-route now around the new constraint
@@ -927,7 +959,11 @@
       };
       const added = addStops([s]);
       $('apptSheet').hidden = true;
-      if (added) toast(work ? 'Appointment added' : 'Stop added');
+      if (added) {
+        // Work mode adds an appointment, personal mode adds a stop.
+        _crumb(work ? 'adding_appointment' : 'adding_stop');
+        toast(work ? 'Appointment added' : 'Stop added');
+      }
     };
     const closeAppt = () => { $('apptSheet').hidden = true; };
     $('apptClose').onclick = closeAppt;
@@ -1099,7 +1135,7 @@
     if (!name) { toast('Give it a nickname'); return; }
     const cb = nickCb;
     closeNickSheet();
-    if (cb) cb(name);
+    if (cb) { cb(name); _crumb('saving_location'); }
   };
 
   $('mAdd').onclick = async () => {
@@ -1112,6 +1148,7 @@
     };
     const added = addStops([s]);
     $('mStreet').value = ''; $('mZip').value = ''; $('mJob').value = '';
+    if (added > 0) _crumb('adding_stop');
     toast(added > 0 ? 'Stop added — locating it now' : 'That address is already on your route');
   };
 
@@ -1120,6 +1157,7 @@
   async function runOcrImport(files) {
     if (!files || !files.length) { toast('No screenshots selected'); return; }
     if (state.stops.length + files.length * 8 > 40) { /* soft guard */ }
+    _crumb('ocr_started');
     $('ocrTitle').textContent = 'Reading screenshots…';
     $('ocrActions').hidden = true;
     $('ocrBarFill').style.width = '0%';
@@ -1163,6 +1201,7 @@
       $('ocrStatus').textContent = 'The text reader could not start — check your connection and retry.';
       $('ocrActions').hidden = false;
       toast('Could not load the text reader — check connection and retry');
+      _crumb('ocr_finished');
       return;
     }
     $('ocrBarFill').style.width = '100%';
@@ -1176,6 +1215,7 @@
     markDirty('Added ' + added + ' stop' + (added === 1 ? '' : 's') +
       (merged.removed ? ' · ' + merged.removed + ' duplicate' + (merged.removed === 1 ? '' : 's') + ' skipped' : ''));
     geocodeInBackground();
+    _crumb('ocr_finished');
   }
   // Picker-cancel detection (2026-10-05): dismissing the native picker fires no
   // `change` event, so the only signal is the window refocus that follows. We
@@ -1188,6 +1228,7 @@
     ocrPickerOpenedAt = 0; // files arrived — not a cancel
     ocrPendingFiles = [...e.target.files];
     e.target.value = '';
+    _crumb('importing_screenshots');
     runOcrImport(ocrPendingFiles);
   });
   window.addEventListener('focus', () => {
@@ -1215,6 +1256,42 @@
       (merged.removed ? ', ' + merged.removed + ' duplicate' + (merged.removed === 1 ? '' : 's') + ' skipped' : ''));
     geocodeInBackground();
     return added;
+  }
+
+  /* ---------- client-side geocode + matrix caches (perf spec 2026-10-05) ---------- */
+  // localStorage probe: iOS private mode throws on write — fall back to
+  // memory-only so a dead cache is a pure slowdown, never an error.
+  // Privacy (§5): keys are the user's own addresses on their own device;
+  // nothing here is logged or leaves the device.
+  function cacheStore() {
+    try {
+      const t = '__rr_cache_probe';
+      localStorage.setItem(t, '1');
+      localStorage.removeItem(t);
+      return localStorage;
+    } catch { return null; }
+  }
+  const _cacheStore = cacheStore();
+  // CODING_RULES §6: geocode results 24h, matrices 1h. LRU-capped so the
+  // blobs stay far under iOS Safari's ~5 MB localStorage budget.
+  const geocodeCache = RouteCore.makeTtlCache('rr.geocode.v1', 24 * 3600 * 1000, 500, _cacheStore);
+  const matrixCache = RouteCore.makeTtlCache('rr.matrix.v1', 3600 * 1000, 8, _cacheStore, {
+    // JSON turns Infinity into null; revive unreachable legs on read.
+    revive: (v) => (v && Array.isArray(v.matrix))
+      ? { matrix: v.matrix.map((row) => (row || []).map((x) => (x == null ? Infinity : x))), source: v.source }
+      : v,
+  });
+  function geocodeCacheLookup(key) {
+    if (!key) return null;
+    try {
+      const v = geocodeCache.get(key);
+      if (v && isFinite(v.lat) && isFinite(v.lng)) return { lat: v.lat, lng: v.lng };
+    } catch {}
+    return null;
+  }
+  function geocodeCacheStore(key, lat, lng) {
+    if (!key || !isFinite(lat) || !isFinite(lng)) return;
+    try { geocodeCache.set(key, { lat: lat, lng: lng }); } catch {}
   }
 
   /* ---------- geocoding ---------- */
@@ -1826,35 +1903,72 @@
         } catch {}
       }
     }
-    // stops: Census batch -> ArcGIS -> Nominatim -> suffix retry -> ZIP area
+    // stops: cache -> Census batch -> ArcGIS (parallel, cap 4) ->
+    //        Nominatim (serial, 1 req/s) -> suffix retry (parallel) -> ZIP area (parallel)
     const missing = state.stops.filter((s) => s.lat == null);
     if (missing.length) {
-      statusFn('Locating ' + missing.length + ' address' +
-        (missing.length === 1 ? '' : 'es') + '…');
-      try { await geocodeCensusBatch(missing); } catch { /* fall through */ }
-      let still = missing.filter((s) => s.lat == null);
-      for (const s of still) {
-        try { await geocodeArcGIS(s); } catch {}
-        await sleep(400);
-      }
-      still = missing.filter((s) => s.lat == null);
-      for (const s of still) {
-        try { await geocodeNominatim(s); } catch {}
-        await sleep(1100); // nominatim politeness
-      }
-      still = missing.filter((s) => s.lat == null);
-      for (const s of still) {
-        const expanded = RouteCore.expandStreetSuffix(s.street || '');
-        if (expanded && expanded !== s.street) {
-          const q = [expanded, s.city, s.state, s.zip].filter(Boolean).join(', ');
-          try { await geocodeArcGIS(s, q); } catch {}
-          await sleep(400);
+      // Cache keys must come from the address form: stopLabel() switches to
+      // "lat,lng" once coords exist, so capture keys before any geocoding.
+      const cacheKeys = new Map();
+      let still = [];
+      for (const s of missing) {
+        const key = RouteCore.normalizeGeocodeKey(stopLabel(s));
+        cacheKeys.set(s, key);
+        const hit = geocodeCacheLookup(key);
+        if (hit) {
+          s.lat = hit.lat; s.lng = hit.lng; s.geocodeSource = 'cache'; s.approx = false;
+        } else {
+          still.push(s);
         }
       }
-      still = missing.filter((s) => s.lat == null);
-      for (const s of still) {
-        await geocodeZipApprox(s);
-        await sleep(300);
+      // Write cache entries for stops this run located (precise results only —
+      // ZIP-approx coords are deliberately never cached: a cached approximation
+      // would block a later, better ArcGIS hit for the same address).
+      const cacheNewlyLocated = (list) => {
+        for (const s of list) {
+          if (s.lat != null && s.lng != null && !s.approx && s.geocodeSource !== 'cache') {
+            geocodeCacheStore(cacheKeys.get(s), s.lat, s.lng);
+          }
+        }
+      };
+      if (still.length) {
+        statusFn('Locating ' + still.length + ' address' +
+          (still.length === 1 ? '' : 'es') + '…');
+        try { await geocodeCensusBatch(still); } catch { /* fall through */ }
+        cacheNewlyLocated(still);
+        still = still.filter((s) => s.lat == null);
+        // ArcGIS stages share one concurrency cap of 4; each worker keeps the
+        // 400/300 ms gap the serial code had (politeness per worker slot).
+        await RouteCore.parallelLimit(still, 4, async (s) => {
+          try { await geocodeArcGIS(s); } catch {}
+          await sleep(400);
+        });
+        cacheNewlyLocated(still);
+        still = still.filter((s) => s.lat == null);
+        // Nominatim usage policy is ≤1 req/s — stays strictly serial.
+        for (const s of still) {
+          try { await geocodeNominatim(s); } catch {}
+          await sleep(1100); // nominatim politeness
+        }
+        cacheNewlyLocated(still);
+        still = still.filter((s) => s.lat == null);
+        const suffixJobs = [];
+        for (const s of still) {
+          const expanded = RouteCore.expandStreetSuffix(s.street || '');
+          if (expanded && expanded !== s.street) {
+            suffixJobs.push({ s: s, q: [expanded, s.city, s.state, s.zip].filter(Boolean).join(', ') });
+          }
+        }
+        await RouteCore.parallelLimit(suffixJobs, 4, async (job) => {
+          try { await geocodeArcGIS(job.s, job.q); } catch {}
+          await sleep(400);
+        });
+        cacheNewlyLocated(still);
+        still = still.filter((s) => s.lat == null);
+        await RouteCore.parallelLimit(still, 4, async (s) => {
+          await geocodeZipApprox(s); // never throws; approx results stay uncached
+          await sleep(300);
+        });
       }
     }
   }
@@ -1901,13 +2015,19 @@
     optInFlight = true;
     const btn = $('optimizeBtn');
     btn.disabled = true;
+    _crumb('optimizing_route');
     const setStatus = (t) => { $('routeStatus').textContent = t; $('routeStatus').className = 'status-line warn'; };
     try {
       if (geocodeInflight) {
         setStatus('Finishing locating addresses…');
         try { await geocodeInflight; } catch {}
       }
-      await ensureGeocoded(setStatus);
+      // Cheap guard: ensureGeocoded is pure overhead when nothing needs
+      // locating (stops all set, start set or GPS-ready, origin settled).
+      if (RouteCore.ensureGeocodeNeeded(state.stops,
+          RouteCore.normalizeEndpoint(state.tripStart), state.origin)) {
+        await ensureGeocoded(setStatus);
+      }
       // Done stops stay visible for history but leave the active route.
       const active = state.stops.filter((s) => !s.done);
       const doneStops = state.stops.filter((s) => s.done);
@@ -1969,10 +2089,12 @@
       const departMin = departMinForOpt();
       const { order, source, matrix, durMin, schedule } = await RouteCore.optimizeRouteAsync(points, {
         startIdx: Math.max(0, startIdx), firstIdx, lastIdx, fetchFn: fetch.bind(window),
+        matrixCache: matrixCache, // 1h client-side matrix cache (perf spec 2026-10-05)
         windows, serviceMin, departMin: departMin, bufferMin: 30,
         forceSchedule: !isWorkMode(), // personal mode: ETAs from pure drive time
         trafficFn: makeTrafficFn(),
       });
+      if (source !== 'osrm') _crumb('optimize_osrm_fallback'); // silent throttle looks like "offline" otherwise
       // before/after from the SAME matrix: apples-to-apples savings
       const beforeMin = RouteCore.routeMinutesForOrder(matrix, beforeOrder, source);
       const afterMin = RouteCore.routeMinutesForOrder(matrix, order, source);
@@ -1995,6 +2117,13 @@
         state.optimized = true;
         lastOptAt = Date.now(); // manual optimizes count for the auto-reopt anti-spam gate
         state.matrixSource = source;
+        _crumb('optimize_finished');
+        // Engine is local-only today (RouteCore on-device); the enum reserves 'backend'.
+        _event('route_optimized', {
+          stop_count: ordered.length,
+          had_windows: windows.some(Boolean),
+          engine: 'local',
+        });
         state.returnActive = !!returnPt;
         state.endActive = !!endPt;
         // Item 4: the map draws from the resolved end point, never the geocode cache.
@@ -2280,6 +2409,7 @@
     return state.origin.label || 'Current location';
   }
   $('mapsBtn').onclick = () => {
+    _crumb('starting_navigation');
     const remaining = state.stops.filter((s) => !s.done);
     if (!remaining.length) { toast('No remaining stops'); return; }
     // pass the stop objects themselves — core.js stopLabel() builds the address text
@@ -2312,6 +2442,7 @@
 
   /* ---------- share ---------- */
   $('shareBtn').onclick = async () => {
+    _crumb('sharing_route');
     // Share the app itself — never the route data (privacy: everything stays on the phone)
     const url = 'https://abrown9299-coder.github.io/route-runner/';
     try {
@@ -2412,6 +2543,7 @@
 
   /* ---------- manual update check ---------- */
   $('updateBtn').onclick = async () => {
+    _crumb('checking_update');
     toast('Checking for updates…');
     try {
       const resp = await fetch('version.json', { cache: 'no-store' });
@@ -2742,6 +2874,7 @@
   function resetRoute(fromSettings) {
     if (!state.stops.length) return;
     if (!confirm('Clear all ' + state.stops.length + ' stops and start a fresh route?')) return;
+    _crumb('clearing_route');
     state.stops = [];
     state.optimized = false;
     state.tripStart = null; // reset: START reverts to live GPS ("Current location")
@@ -2816,6 +2949,8 @@
       endLegTracking(best.id); // arrival: traffic learning
       state.checkedIn = { stopId: best.id, startedAt: Date.now(), auto: true };
       clearDriveAway(); // new service: fresh window
+      _crumb('checking_in');
+      _event('check_in', {});
       save(); render();
       toast('📍 Auto checked in — ' + serviceMinFor(best) + ' min service timer running');
       maybeAutoReopt('checkin');
@@ -2859,6 +2994,7 @@
     state.checkedIn = null;
     clearDriveAway();
     s.done = true;
+    _event('stop_completed', {});
     trackDepartureLeg();
     if (state.stops.length && state.stops.every((x) => x.done)) {
       state.completedAt = Date.now();
@@ -2925,6 +3061,7 @@
 
   /* ---------- settings ---------- */
   $('settingsBtn').onclick = () => {
+    _crumb('opening_settings');
     $('setTolls').checked = settings.avoidTolls;
     $('setHwy').checked = settings.avoidHwy;
     $('setReturn').checked = settings.returnToStart;
@@ -3021,16 +3158,24 @@
   /* Geocode a raw address string: ArcGIS (score ≥ 80) → Nominatim (GPS bias).
    * Returns {lat, lng} or null. Every fetch path is failure-guarded. */
   async function geocodeAddressString(q) {
+    const key = RouteCore.normalizeGeocodeKey(q);
+    const hit = geocodeCacheLookup(key);
+    if (hit) return hit;
     const tmp = { street: q, city: '', state: '', zip: '' };
     try {
-      if (await geocodeArcGIS(tmp, q)) return { lat: tmp.lat, lng: tmp.lng };
+      if (await geocodeArcGIS(tmp, q)) {
+        geocodeCacheStore(key, tmp.lat, tmp.lng);
+        return { lat: tmp.lat, lng: tmp.lng };
+      }
     } catch {}
     try {
       const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
         encodeURIComponent(q) + photonBiasParams(), { headers: { 'Accept': 'application/json' } });
       const j = await r.json();
       if (j && j[0] && j[0].lat && j[0].lon) {
-        return { lat: parseFloat(j[0].lat), lng: parseFloat(j[0].lon) };
+        const lat = parseFloat(j[0].lat), lng = parseFloat(j[0].lon);
+        geocodeCacheStore(key, lat, lng);
+        return { lat: lat, lng: lng };
       }
     } catch {}
     return null;
@@ -3062,6 +3207,7 @@
       settings.savedLocations = r.saved;
       save(); renderSavedLocations(); render();
       closeAddSavedSheet();
+      _crumb('saving_location');
       toast('⭐ Saved "' + nickname + '"');
     } finally {
       btn.disabled = false;
@@ -3226,9 +3372,11 @@
     save(); updateModeHint(); renderServiceTimes(); render();
     if (settings.mode === 'personal') stopAutoCheckinWatch();
     else if (settings.autoCheckin) startAutoCheckinWatch();
+    _crumb('changing_setting');
     toast(settings.mode === 'personal' ? 'Personal profile — work features hidden' : 'Work profile');
   });
   $('settingsClose').onclick = () => {
+    _crumb('changing_setting'); // checkbox settings apply on close
     const retBefore = settings.returnToStart;
     settings.avoidTolls = $('setTolls').checked;
     settings.avoidHwy = $('setHwy').checked;
@@ -3314,6 +3462,7 @@
     if (v >= SVC_MIN && v <= SVC_MAX) {
       settings.serviceTimes.byJobType[sel.dataset.jt] = v;
       save(); renderServiceTimes();
+      _crumb('changing_setting');
       toast('Service time saved');
       maybeAutoReopt('window');
     }
@@ -3330,6 +3479,7 @@
     if (v >= SVC_MIN && v <= SVC_MAX) {
       settings.serviceTimes.default = v;
       save(); renderServiceTimes();
+      _crumb('changing_setting');
       toast('Default service time: ' + v + ' min');
       maybeAutoReopt('window');
     }
@@ -3351,7 +3501,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261006-015154' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261006-040301' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
@@ -3385,10 +3535,10 @@
   function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch {} }
   function ssDel(k) { try { sessionStorage.removeItem(k); } catch {} }
   function checkForUpdate() {
-    // Dev tree (unstamped 20261006-015154): version.json belongs to some other
+    // Dev tree (unstamped 20261006-040301): version.json belongs to some other
     // build — never "update" here, or the page reload-loops every ~30s.
     // Mirrors the stale-code gate in index.html.
-    if (!APP_VERSION || APP_VERSION === 'dev' || APP_VERSION.indexOf('20261006-015154') !== -1) return;
+    if (!APP_VERSION || APP_VERSION === 'dev' || APP_VERSION.indexOf('20261006-040301') !== -1) return;
     const now = Date.now();
     if (now - lastUpdateCheck < 30000) return; // throttle foreground checks
     lastUpdateCheck = now;
@@ -3453,6 +3603,16 @@
   // init, or GPS prompt. If install.js failed to load, boot degraded
   // rather than dead.
   function bootApp() {
+    // Stats first: init (device id, queue flush), then the global error
+    // handlers before any other boot work, then the boot event + breadcrumb.
+    try {
+      if (Stats) {
+        Stats.init();
+        Stats.installErrorHandlers();
+        Stats.crumb('app_boot');
+        Stats.trackEvent('app_boot', {});
+      }
+    } catch {}
     load();
     if (!loadSharedRoute()) render();
     try { const av = $('appVer'); if (av) av.textContent = APP_VERSION; } catch {}

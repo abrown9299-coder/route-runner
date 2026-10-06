@@ -1,8 +1,8 @@
-/* RouteRunner service worker — offline app shell. 20261006-015154 is stamped by dev/deploy.py. */
+/* RouteRunner service worker — offline app shell. 20261006-040301 is stamped by dev/deploy.py. */
 /* global Request: readonly, Response: readonly */
-const CACHE = 'routerunner-20261006-015154';
+const CACHE = 'routerunner-20261006-040301';
 const SHELL = [
-  './', './index.html', './styles.css', './app.js', './core.js', './ocr.js', './install.js',
+  './', './index.html', './styles.css', './app.js', './core.js', './ocr.js', './install.js', './stats.js',
   './manifest.json', './icon-192.png', './icon-512.png',
 ];
 // Caches the install/update system owns — activate must never delete these
