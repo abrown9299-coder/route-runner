@@ -4,7 +4,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261006-181552';
+  const RR_BUILD = '20261006-192324';
   const $ = (id) => document.getElementById(id);
   // Anonymous stats (app/stats.js, loaded before this file): safe wrappers —
   // stats.js may fail to load or self-disable (dev build), and Stats never
@@ -3502,7 +3502,7 @@
   // Self-healing: if the loaded JS build doesn't match the page build,
   // Safari served a stale app.js — force a cache-busting reload once.
   try {
-    if (RR_BUILD && RR_BUILD !== '20261006-181552' && APP_VERSION && APP_VERSION !== 'dev' &&
+    if (RR_BUILD && RR_BUILD !== '20261006-192324' && APP_VERSION && APP_VERSION !== 'dev' &&
         RR_BUILD !== APP_VERSION && !/[?&]v=/.test(location.search) &&
         !sessionStorage.getItem('rr.selfheal')) {
       sessionStorage.setItem('rr.selfheal', '1');
@@ -3536,10 +3536,10 @@
   function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch {} }
   function ssDel(k) { try { sessionStorage.removeItem(k); } catch {} }
   function checkForUpdate() {
-    // Dev tree (unstamped 20261006-181552): version.json belongs to some other
+    // Dev tree (unstamped 20261006-192324): version.json belongs to some other
     // build — never "update" here, or the page reload-loops every ~30s.
     // Mirrors the stale-code gate in index.html.
-    if (!APP_VERSION || APP_VERSION === 'dev' || APP_VERSION.indexOf('20261006-181552') !== -1) return;
+    if (!APP_VERSION || APP_VERSION === 'dev' || APP_VERSION.indexOf('20261006-192324') !== -1) return;
     const now = Date.now();
     if (now - lastUpdateCheck < 30000) return; // throttle foreground checks
     lastUpdateCheck = now;

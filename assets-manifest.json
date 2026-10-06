@@ -1,6 +1,6 @@
 {
-  "manifestVersion": "20261006-181552",
-  "generatedAt": "2026-10-06T18:15:53.292215+00:00",
+  "manifestVersion": "20261006-192324",
+  "generatedAt": "2026-10-06T19:23:25.024872+00:00",
   "assets": [
     {
       "path": "vendor/leaflet.min.js",
@@ -56,7 +56,7 @@
   "shell": [
     {
       "path": "index.html",
-      "sha256": "d56723c56844007e26bbed97f817306dfd595bf847c7498d12b7da67677c46c4",
+      "sha256": "be603080dd11b46c9ae4e2e0785eab9a6764f6c75e9ca4c964a80ca87acf358b",
       "bytes": 24283
     },
     {
@@ -66,7 +66,7 @@
     },
     {
       "path": "app.js",
-      "sha256": "de01f8d6ec867bf7e015f27e927a542af850ef9b328fdd2e6bbc333b4f12aecb",
+      "sha256": "a8e49447ba6c847fba710032336a02a43503ac88e36d3709d4a55dc877b0bf8a",
       "bytes": 170511
     },
     {
