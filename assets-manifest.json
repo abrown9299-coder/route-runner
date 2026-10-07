@@ -1,6 +1,6 @@
 {
-  "manifestVersion": "20261007-192454",
-  "generatedAt": "2026-10-07T19:24:55.361867+00:00",
+  "manifestVersion": "20261007-202223",
+  "generatedAt": "2026-10-07T20:22:25.433605+00:00",
   "assets": [
     {
       "path": "vendor/leaflet.min.js",
@@ -56,7 +56,7 @@
   "shell": [
     {
       "path": "index.html",
-      "sha256": "bdba423494065024ba163c5398e61c46a64ecd1b16ab96deb2521692489eefe1",
+      "sha256": "64c476f3da45b5cc3ddcdcddd28852d1dabc405f1b18f016f76d7888d73778e9",
       "bytes": 25794
     },
     {
@@ -81,8 +81,8 @@
     },
     {
       "path": "stats-config.js",
-      "sha256": "28a0d3338bf4d228e6228ecc57ab7720cbf2c7eee32d33211bbc7040bef7ccfa",
-      "bytes": 5489
+      "sha256": "28a43af9257579b40582923ef45eca0ea36f8b925cd5b5d40fc0dd380e77d6ea",
+      "bytes": 5487
     },
     {
       "path": "stats-data.js",
@@ -106,7 +106,7 @@
     },
     {
       "path": "app-state.js",
-      "sha256": "7af36b7048fd40d9394351b71d5f1e6a8e874e7b6cf8047cf995bde0673e0fcf",
+      "sha256": "198568ec37eacc3159fe743143c728bac5c0949ab9f7e323e1f88b0de5f7c578",
       "bytes": 11644
     },
     {
@@ -156,8 +156,8 @@
     },
     {
       "path": "app-optimize.js",
-      "sha256": "1c46bc9b45d3c0222e895e0386eb69b4878de5daca5dccccf579e097e3e93565",
-      "bytes": 34207
+      "sha256": "b5da67da1ffc12ae4bebaa24e1bde765ba3ed3eb745859518e03025758a8532d",
+      "bytes": 34205
     },
     {
       "path": "app-map.js",
@@ -201,7 +201,7 @@
     }
   ],
   "tiles": {
-    "template": "https://40.160.37.237:8443/tiles/bright/{z}/{x}/{y}.png",
+    "template": "https://stopflow.io:8443/tiles/bright/{z}/{x}/{y}.png",
     "zmin": 10,
     "zmax": 15,
     "radiusKm": 12,

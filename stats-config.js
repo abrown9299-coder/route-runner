@@ -32,7 +32,7 @@
 
   /* ---------- build-time placeholders (stamped by dev/deploy.py) ---------- */
   var INGEST_KEY = 'rring_d36b7c0bb12a90a32c0aa5b740f40acfc8a1dd852a7e869b'; // -> rring_… (600-perm file on the server, read at deploy time)
-  var GATEWAY = 'https://40.160.37.237:8443';       // -> e.g. https://40.160.37.237:8443
+  var GATEWAY = 'https://stopflow.io:8443';       // -> e.g. https://40.160.37.237:8443
   // Split literals: these must NEVER contain the contiguous placeholder bytes,
   // or the deploy-time replacement would stamp them too and the enabled-check
   // below could never tell a stamped build from an unstamped one. (Same
