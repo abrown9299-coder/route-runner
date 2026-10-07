@@ -650,7 +650,7 @@
   /* ---------- offline tiles (INSTALL_SPEC.md IR11) ---------- */
   // Same template the install manifest pre-fetches with — deploy.py
   // asserts this matches the manifest tile template so cache hits align.
-  const TILE_TEMPLATE = 'https://40.160.37.237:8443/tiles/bright/{z}/{x}/{y}.png'; // stamped at deploy time by dev/deploy.py (TILE_URL env)
+  const TILE_TEMPLATE = 'https://assuming-regularly-replies-expand.trycloudflare.com/tiles/bright/{z}/{x}/{y}.png'; // stamped at deploy time by dev/deploy.py (TILE_URL env)
   const TILES_CACHE = 'routerunner-tiles-v1';
   const LS_TILE_META = 'rr.tiles.meta.v1';
   const LS_TILE_CFG = 'rr.tiles.cfg.v1';

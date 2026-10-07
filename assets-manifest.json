@@ -1,6 +1,6 @@
 {
-  "manifestVersion": "20261007-163201",
-  "generatedAt": "2026-10-07T16:32:02.551066+00:00",
+  "manifestVersion": "20261007-164857",
+  "generatedAt": "2026-10-07T16:48:58.796100+00:00",
   "assets": [
     {
       "path": "vendor/leaflet.min.js",
@@ -56,7 +56,7 @@
   "shell": [
     {
       "path": "index.html",
-      "sha256": "423786d0493e4df6469aee3f7641685bc140748da30c0230a738dfce7c99a732",
+      "sha256": "578b8607082c04596adcf79dbf23cc0357a7dce9ebdf562d3785f5628bc117b5",
       "bytes": 25342
     },
     {
@@ -81,8 +81,8 @@
     },
     {
       "path": "stats-config.js",
-      "sha256": "28a0d3338bf4d228e6228ecc57ab7720cbf2c7eee32d33211bbc7040bef7ccfa",
-      "bytes": 5489
+      "sha256": "1fdbf5d3cafaae2736f4ef7da186a3f1302c2ce4ae54a26c4014867aa60f1c72",
+      "bytes": 5522
     },
     {
       "path": "stats-data.js",
@@ -106,7 +106,7 @@
     },
     {
       "path": "app-state.js",
-      "sha256": "6bd448dabe3f453c9d4d52568715198e3991f5b147cbb5abd59a6467b88ba770",
+      "sha256": "3ef5eeb1457910d78419a062f23df52be2bbd8108378ef76638fb17cb59f2ef3",
       "bytes": 11644
     },
     {
@@ -156,8 +156,8 @@
     },
     {
       "path": "app-optimize.js",
-      "sha256": "e75379197561ba0b6d2a4c44b199fb7f18fb71258292623139ea8e9099da7830",
-      "bytes": 33213
+      "sha256": "7f6b48bb0e90a6aad720e8c4eba6625d231f98697f5810cc90d17bc8c8118cc1",
+      "bytes": 33246
     },
     {
       "path": "app-map.js",
@@ -201,7 +201,7 @@
     }
   ],
   "tiles": {
-    "template": "https://40.160.37.237:8443/tiles/bright/{z}/{x}/{y}.png",
+    "template": "https://assuming-regularly-replies-expand.trycloudflare.com/tiles/bright/{z}/{x}/{y}.png",
     "zmin": 10,
     "zmax": 15,
     "radiusKm": 12,

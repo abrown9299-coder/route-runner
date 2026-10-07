@@ -8,7 +8,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261007-163201';
+  const RR_BUILD = '20261007-164857';
   const $ = (id) => document.getElementById(id);
   // Anonymous stats (app/stats.js, loaded before this file): safe wrappers —
   // stats.js may fail to load or self-disable (dev build), and Stats never
