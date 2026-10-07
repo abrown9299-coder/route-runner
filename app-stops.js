@@ -66,11 +66,11 @@
 
   /* Verify the real drive time for the current stop order in the background
    * (debounced so rapid edits collapse into one routing call). Replaces the
-   * haversine guess once the OSRM duration matrix arrives. */
+   * haversine guess once the Valhalla duration matrix arrives. */
   let preDriveTimer = null, preDriveToken = 0;
-  // Point-set signature of the last successful OSRM pre-drive fetch — edits
+  // Point-set signature of the last successful pre-drive fetch — edits
   // that don't move points (pin, reorder, done) skip the refetch entirely.
-  // Only set on OSRM success: a throttled demo server keeps retrying later.
+  // Only set on drive-time success: a failed gateway keeps retrying later.
   let lastPreDriveSig = null;
   function schedulePreDriveTime() {
     if (preDriveTimer) clearTimeout(preDriveTimer);
@@ -87,11 +87,11 @@
     try {
       const r = await RouteCore.cachedDurationMatrix(pts, fetch.bind(window), matrixCache);
       if (my !== preDriveToken || state.optimized) return; // superseded
-      if (r.source !== 'osrm') { _crumb('predrive_osrm_fallback'); return; } // haversine fallback adds nothing new
+      if (!RouteCore.isSecondsSource(r.source)) { _crumb('predrive_osrm_fallback'); return; } // haversine fallback adds nothing new (crumb name kept for dashboard continuity)
       lastPreDriveSig = sig;
       state.preDriveMin = RouteCore.routeMinutesForOrder(
-        r.matrix, pts.map((_, i) => i), 'osrm');
-      state.preDriveSource = 'osrm';
+        r.matrix, pts.map((_, i) => i), r.source);
+      state.preDriveSource = r.source;
       save(); render();
     } catch { /* keep the rough estimate */ }
   }
@@ -297,7 +297,7 @@
       st.className = 'status-line warn';
     }
     else if (!state.optimized) {
-      if (state.preDriveSource === 'osrm' && state.preDriveMin > 0) {
+      if (RouteCore.isSecondsSource(state.preDriveSource) && state.preDriveMin > 0) {
         st.textContent = 'Est. drive ≈ ' + RouteCore.formatMins(state.preDriveMin) +
           ' (drive time) — tap ⚡ Optimize when ready.';
       } else {
@@ -309,7 +309,7 @@
       st.className = 'status-line warn';
     } else {
       const e = state.lastEstimate;
-      let t = (state.matrixSource === 'osrm' ? 'Optimized by drive time'
+      let t = (RouteCore.isSecondsSource(state.matrixSource) ? 'Optimized by drive time'
           : 'Optimized by straight-line distance') + ' · ' + total + ' stops';
       if (e && e.afterMin > 0) {
         t += ' · ≈' + RouteCore.formatMins(e.afterMin);

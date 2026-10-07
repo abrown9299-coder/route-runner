@@ -1,6 +1,6 @@
 {
-  "manifestVersion": "20261007-001402",
-  "generatedAt": "2026-10-07T00:14:03.147533+00:00",
+  "manifestVersion": "20261007-143022",
+  "generatedAt": "2026-10-07T14:30:24.012031+00:00",
   "assets": [
     {
       "path": "vendor/leaflet.min.js",
@@ -56,7 +56,7 @@
   "shell": [
     {
       "path": "index.html",
-      "sha256": "75c855781fb8da1ea5600107cdbe37062f6bce22bb0f3836bbad8e89876dc0cb",
+      "sha256": "06052005f94386a12900d823d27788a97e089dbcfb9e5089c977472951bb0e56",
       "bytes": 25304
     },
     {
@@ -66,8 +66,8 @@
     },
     {
       "path": "core.js",
-      "sha256": "879e592da1dc7a7309d95af711d0f206454c2d651a20b76a20794054b392d2ec",
-      "bytes": 76762
+      "sha256": "c9a8c78ea6910672acca1a1b07dcf6cfaa988480b0ba3c0a31923b1216e570fe",
+      "bytes": 80688
     },
     {
       "path": "ocr.js",
@@ -81,8 +81,8 @@
     },
     {
       "path": "stats-config.js",
-      "sha256": "cc98ec3936d6dd27a1faf6446a8788edda06413f49fd51ee4bf874dca4b6aa04",
-      "bytes": 5142
+      "sha256": "519d0c96d8fecbd0dccd9594a17f266aca0c97c11ad8f6f89356c1cae9bed21b",
+      "bytes": 5065
     },
     {
       "path": "stats-data.js",
@@ -101,18 +101,18 @@
     },
     {
       "path": "stats-report.js",
-      "sha256": "2cbfa01165572f9b3473144167855930960a69947686cd3b59f362f012007c7f",
-      "bytes": 14202
+      "sha256": "b96cf3b497dc700d14897adba288196da522deed7d3d94f61efca70b16073e13",
+      "bytes": 14899
     },
     {
       "path": "app-state.js",
-      "sha256": "43359524bd766eb6fc7543aafd16b3352136d74bf1c01a277909740cf01ef047",
-      "bytes": 11588
+      "sha256": "5b3c4d3a447cc342e4b3daaf3219227828fc355c85d3945f218c6c4374d0674b",
+      "bytes": 11644
     },
     {
       "path": "app-stops.js",
-      "sha256": "813a0db5f9b20c972b4db60b878cf2e729c7fa1395108255bdd016f12e22a0d8",
-      "bytes": 25326
+      "sha256": "48950bb89797b75927185f0674761d34c7c21e696b82c24b73bd4c56d2534b8b",
+      "bytes": 25420
     },
     {
       "path": "app-windows.js",
@@ -151,13 +151,13 @@
     },
     {
       "path": "app-optimize.js",
-      "sha256": "e06429c3edbea876f3103b9278fc814f8bbf089c9ba5f07941a036241e2d8aeb",
-      "bytes": 32114
+      "sha256": "f817970e25a19aba55f9fabfe03965010eb2a2647f982b95b1dc11a6cc868e43",
+      "bytes": 32264
     },
     {
       "path": "app-map.js",
-      "sha256": "ce62bc8829c2b5d00501d13a7b93cb834742d879cc9c618717416c7d795f12e1",
-      "bytes": 10489
+      "sha256": "3de89ced200d3a068a9c6071a001bb022ac394499883d0cd7b57592a2587861b",
+      "bytes": 11637
     },
     {
       "path": "app-route.js",
@@ -196,7 +196,7 @@
     }
   ],
   "tiles": {
-    "template": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    "template": "https://40.160.37.237:8443/tiles/bright/{z}/{x}/{y}.png",
     "zmin": 10,
     "zmax": 15,
     "radiusKm": 12,

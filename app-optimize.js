@@ -90,7 +90,7 @@
         trafficFn: makeTrafficFn(),
         seedOrder: beforeOrder, // idempotency: re-optimize keeps a stable route (2026-10-06)
       });
-      if (source !== 'osrm') _crumb('optimize_osrm_fallback'); // silent throttle looks like "offline" otherwise
+      if (!RouteCore.isSecondsSource(source)) _crumb('optimize_osrm_fallback'); // silent gateway failure looks like "offline" otherwise (crumb name kept for dashboard continuity)
       // before/after from the SAME matrix: apples-to-apples savings
       const beforeMin = RouteCore.routeMinutesForOrder(matrix, beforeOrder, source);
       const afterMin = RouteCore.routeMinutesForOrder(matrix, order, source);
@@ -189,7 +189,7 @@
         toast(auto ? '⚡ Auto re-optimized — all confirmed windows on track'
                    : '⚡ Optimized — all confirmed windows on track');
       } else {
-        toast(source === 'osrm' ? '⚡ Optimized by drive time' : '⚡ Optimized (straight-line — offline mode)');
+        toast(RouteCore.isSecondsSource(source) ? '⚡ Optimized by drive time' : '⚡ Optimized (straight-line — offline mode)');
       }
       }; // end applyOptimization
       /* Re-opt prompt (v1.9.1): true only when the auto engine found a reorder
@@ -633,7 +633,7 @@
   /* ---------- offline tiles (INSTALL_SPEC.md IR11) ---------- */
   // Same template the install manifest pre-fetches with — deploy.py
   // asserts this matches the manifest tile template so cache hits align.
-  const TILE_TEMPLATE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  const TILE_TEMPLATE = 'https://40.160.37.237:8443/tiles/bright/{z}/{x}/{y}.png'; // stamped at deploy time by dev/deploy.py (TILE_URL env)
   const TILES_CACHE = 'routerunner-tiles-v1';
   const LS_TILE_META = 'rr.tiles.meta.v1';
   const LS_TILE_CFG = 'rr.tiles.cfg.v1';

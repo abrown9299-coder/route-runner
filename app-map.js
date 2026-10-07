@@ -51,6 +51,16 @@
   }
   // Cache-first tile bytes for the map layer; null = fall back to the
   // plain URL (network via the <img> element itself).
+  // 2026-10-07 (tile migration): OSMF emergency fallback — if the self-hosted
+  // tile server is unreachable, retry the tile from OSMF once. OSMF stays out
+  // of the default path; this only fires when the primary is down.
+  const OSMF_FALLBACK_TEMPLATE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  function osmfFallbackUrl(vpsUrl) {
+    if (typeof vpsUrl !== 'string' || vpsUrl.includes('tile.openstreetmap.org')) return null;
+    const m = vpsUrl.match(/\/(\d+)\/(\d+)\/(\d+)\.png(?:\?.*)?$/);
+    if (!m) return null;
+    return OSMF_FALLBACK_TEMPLATE.replace('{z}', m[1]).replace('{x}', m[2]).replace('{y}', m[3]);
+  }
   async function tileBytesForLayer(url) {
     try {
       const cache = await caches.open(TILES_CACHE);
@@ -59,7 +69,19 @@
     } catch {}
     let resp = null;
     try { resp = await fetch(url, { cache: 'no-store' }); } catch { /* offline */ }
-    if (!resp || !resp.ok) return null;
+    if ((!resp || !resp.ok)) {
+      const fallbackUrl = osmfFallbackUrl(url);
+      if (fallbackUrl) {
+        try { resp = await fetch(fallbackUrl, { cache: 'no-store' }); } catch { /* offline */ }
+        if (resp && resp.ok) {
+          const blob = await resp.blob();
+          // Cache under the OSMF URL so cache keys stay honest.
+          tileCachePut(fallbackUrl, blob).catch(() => {});
+          return URL.createObjectURL(blob);
+        }
+      }
+      return null;
+    }
     const blob = await resp.blob();
     tileCachePut(url, blob).catch(() => {});
     return URL.createObjectURL(blob);
@@ -88,7 +110,7 @@
       },
     });
     return new CachedLayer(TILE_TEMPLATE, {
-      attribution: '&copy; OpenStreetMap', maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>', maxZoom: 19,
     });
   }
 

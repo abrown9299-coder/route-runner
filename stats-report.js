@@ -355,6 +355,23 @@
     };
   }
 
+  /* Build-stamped gateway config for non-stats callers (core.js reads these
+   * for the Valhalla /v1/matrix path). Null when the build left the
+   * placeholder — never throws. Independent of the stats opt-out: a user
+   * who disables stats still gets drive-time routing. */
+  function stampedGatewayUrl() {
+    try {
+      if (!GATEWAY || GATEWAY === GATEWAY_PLACEHOLDER) return null;
+      return GATEWAY;
+    } catch { return null; }
+  }
+  function stampedIngestKey() {
+    try {
+      if (!INGEST_KEY || INGEST_KEY === KEY_PLACEHOLDER) return null;
+      return INGEST_KEY;
+    } catch { return null; }
+  }
+
   // Scoped in an IIFE: a top-level `var Stats` here would collide with app-state.js's
   // `const Stats` (module-split 2026-10-06) — `var`+`const` on the same global name is a
   // SyntaxError and would kill the entire boot. window.Stats is still published below.
@@ -370,6 +387,8 @@
     flush: safe(flush),
     sanitizeMessage: safe(sanitizeMessage),
     sanitizeStack: safe(sanitizeStack),
+    gatewayUrl: safe(stampedGatewayUrl),
+    ingestKey: safe(stampedIngestKey),
   };
 
   if (typeof window !== 'undefined') {

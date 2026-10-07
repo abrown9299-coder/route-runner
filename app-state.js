@@ -8,7 +8,7 @@
   'use strict';
   // Stamped by deploy.py. If this ever disagrees with the index.html meta
   // version at boot, the JS is stale and we force a clean reload.
-  const RR_BUILD = '20261007-001402';
+  const RR_BUILD = '20261007-143022';
   const $ = (id) => document.getElementById(id);
   // Anonymous stats (app/stats.js, loaded before this file): safe wrappers —
   // stats.js may fail to load or self-disable (dev build), and Stats never
@@ -25,11 +25,11 @@
     tripStart: null,     // {label, lat, lng} | null — pinned Start row. Null = auto from GPS at optimize time.
     tripEnd: null,       // {label, lat, lng} | null — pinned End row. Null = skipped silently on optimize.
     optimized: false,
-    matrixSource: null,  // 'osrm' | 'haversine'
+    matrixSource: null,  // 'valhalla' | 'haversine' ('osrm' legacy in old caches)
     pinModeStopId: null,
     preEstimateMin: 0,   // rough haversine drive estimate, pre-optimization
-    preDriveMin: null,   // real OSRM drive time for current order (verified in background)
-    preDriveSource: null, // 'osrm' when preDriveMin is a real routed time
+    preDriveMin: null,   // real drive time for current order (verified in background via Valhalla)
+    preDriveSource: null, // seconds-source label when preDriveMin is a real routed time
     lastEstimate: null,  // {beforeMin, afterMin, savedMin, source} post-optimization
     geocoding: false,    // background geocode in flight
     geocodeStatus: '',

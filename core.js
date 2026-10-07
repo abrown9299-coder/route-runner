@@ -484,22 +484,29 @@ function pathCost(order, matrix) {
 var DEFAULT_SERVICE_MIN = 45;
 var WINDOW_BUFFER_MIN = 30;
 
-/* Drive-minute matrix parallel to `matrix`: osrm holds seconds,
+/* Which matrix sources hold seconds (drive-time engines) vs miles.
+ * 'osrm' is legacy (pre-2026-10-07 caches); 'valhalla' is the current
+ * gateway path. Anything else is the haversine fallback in miles. */
+function isSecondsSource(source) {
+  return source === 'osrm' || source === 'valhalla';
+}
+
+/* Drive-minute matrix parallel to `matrix`: seconds sources hold seconds,
  * haversine holds miles. Unreachable legs become Infinity. */
 function minutesMatrix(matrix, source) {
   var m = matrix || [];
   return m.map(function (row) {
     return (row || []).map(function (v) {
       if (v === null || v === undefined || !isFinite(v)) return Infinity;
-      return (source === 'osrm') ? v / 60 : v * HAVERSINE_MIN_PER_MI;
+      return isSecondsSource(source) ? v / 60 : v * HAVERSINE_MIN_PER_MI;
     });
   });
 }
 
-/* Time-of-day traffic multiplier for Nashville. OSRM gives free-flow times;
- * this adjusts toward the average drive time for that time of day. Not
- * real-time, but much closer than free-flow. Based on typical Nashville
- * congestion patterns; refined over time from actual drive data. */
+/* Time-of-day traffic multiplier for Nashville. The drive-time engine gives
+ * free-flow times; this adjusts toward the average drive time for that time
+ * of day. Not real-time, but much closer than free-flow. Based on typical
+ * Nashville congestion patterns; refined over time from actual drive data. */
 function trafficFactorAt(departMin) {
   var t = ((departMin % 1440) + 1440) % 1440; /* minutes since midnight */
   var h = t / 60;
@@ -916,9 +923,9 @@ function simulateSchedule(order, durMin, ctx) {
     /* unreachable leg: astronomic drive time so no optimizer picks it */
     var baseDm = (d === null || d === undefined || !isFinite(d)) ? 1e9 : d;
     /* Traffic-aware: adjust for the time of day this leg is driven.
-     * OSRM gives free-flow; this gets us to the average for that hour.
-     * Disable with ctx.traffic === false (tests). Use ctx.trafficFn(t)
-     * for a custom (e.g. learned) factor function. */
+     * The drive-time engine gives free-flow; this gets us to the average
+     * for that hour. Disable with ctx.traffic === false (tests). Use
+     * ctx.trafficFn(t) for a custom (e.g. learned) factor function. */
     var useTraffic = !c || c.traffic !== false;
     var tfFn = (c && typeof c.trafficFn === 'function') ? c.trafficFn : trafficFactorAt;
     var ptCoords = (c && c.pointCoords) || [];
@@ -1184,8 +1191,98 @@ function optimizeOrder(matrix, opts) {
 }
 
 /* ------------------------------------------------------------------ */
-/* OSRM drive-duration matrix with haversine fallback                   */
+/* Valhalla drive-duration matrix (via gateway /v1/matrix) with          */
+/* haversine fallback                                                  */
 /* ------------------------------------------------------------------ */
+
+/* Gateway config for the matrix path, via the Stats module's
+ * build-stamped values (dev/deploy.py stamps __STATS_GATEWAY__ /
+ * __STATS_INGEST_KEY__ into stats-config.js). Null when unstamped (dev
+ * builds) — the matrix path then skips straight to haversine, never
+ * throws. window.Stats may be absent in tests; guarded.
+ *
+ * NOTE: resolved via globalThis, not bare `window`: core.js is require()d
+ * in node by the dev harness/vitest, so a bare `window` reference would
+ * see node's (empty) global instead of the browser/VM one. Test setups
+ * inject `globalThis.window = { Stats: ... }` to simulate a stamped build. */
+function matrixGatewayConfig() {
+  try {
+    var g = (typeof globalThis !== 'undefined') ? globalThis : null;
+    var w = (g && g.window) || null;
+    var S = (w && w.Stats) || null;
+    if (!S || typeof S.gatewayUrl !== 'function' ||
+        typeof S.ingestKey !== 'function') return null;
+    var url = S.gatewayUrl(), key = S.ingestKey();
+    if (!url || !key) return null;
+    return { url: String(url).replace(/\/+$/, ''), key: key };
+  } catch { return null; }
+}
+
+/* Build a Valhalla sources_to_targets request body from points.
+ * All points are both sources and targets (full n×n matrix). */
+function buildValhallaMatrixRequest(points) {
+  var locs = (points || []).map(function (p) {
+    return { lat: p.lat, lon: p.lng };
+  });
+  return {
+    sources: locs.map(function (l) { return { lat: l.lat, lon: l.lon }; }),
+    targets: locs.map(function (l) { return { lat: l.lat, lon: l.lon }; }),
+    costing: 'auto'
+  };
+}
+
+/* JS port of the gateway's _flatten_pairs (traffic.py): Valhalla returns
+ * sources_to_targets as a NESTED list (one sub-list per source); older
+ * shapes are a flat list of leg dicts. Returns the leg dicts in
+ * deterministic order (outer, then inner). Non-dict items are skipped. */
+function flattenValhallaPairs(pairs) {
+  var flat = [];
+  (pairs || []).forEach(function (p) {
+    if (p && typeof p === 'object' && !Array.isArray(p)) {
+      flat.push(p);
+    } else if (Array.isArray(p)) {
+      p.forEach(function (q) {
+        if (q && typeof q === 'object' && !Array.isArray(q)) flat.push(q);
+      });
+    }
+  });
+  return flat;
+}
+
+/* Parse a Valhalla sources_to_targets response (as served by gateway
+ * /v1/matrix, traffic-adjusted) into the flat n×n seconds matrix
+ * optimizeOrder expects. Legs are placed by from_index/to_index, so the
+ * parse does not depend on response order; when indices are absent it
+ * falls back to row-major position. Missing/unreachable legs and
+ * non-finite times become Infinity. Throws on a missing or malformed
+ * sources_to_targets payload. */
+function parseValhallaMatrix(json, n) {
+  var pairs = json && json.sources_to_targets;
+  if (!Array.isArray(pairs)) throw new Error('valhalla: bad payload');
+  var legs = flattenValhallaPairs(pairs);
+  var matrix = [];
+  for (var i = 0; i < n; i++) {
+    var row = [];
+    for (var j = 0; j < n; j++) row.push(Infinity);
+    matrix.push(row);
+  }
+  var placed = 0;
+  legs.forEach(function (leg, idx) {
+    var fi = leg.from_index, ti = leg.to_index;
+    if (typeof fi !== 'number' || typeof ti !== 'number' ||
+        fi < 0 || ti < 0 || fi >= n || ti >= n) {
+      /* no usable indices — assume row-major order */
+      fi = Math.floor(idx / n); ti = idx % n;
+      if (fi >= n || ti >= n) return;
+    }
+    var t = leg.time;
+    matrix[fi][ti] =
+      (typeof t === 'number' && isFinite(t) && t >= 0) ? t : Infinity;
+    placed++;
+  });
+  if (placed === 0 && n > 0) throw new Error('valhalla: no legs parsed');
+  return matrix;
+}
 
 function buildDurationMatrix(points, fetchFn) {
   var pts = points || [];
@@ -1199,31 +1296,22 @@ function buildDurationMatrix(points, fetchFn) {
     return Promise.resolve({ matrix: buildHaversineMatrix(pts), source: 'haversine' });
   }
 
-  var coords = pts.map(function (p) { return p.lng + ',' + p.lat; }).join(';');
-  var url = 'https://router.project-osrm.org/table/v1/driving/' + coords +
-            '?annotations=duration';
+  var gw = matrixGatewayConfig();
+  if (!gw) {
+    /* dev/unstamped build: no gateway to call — straight to haversine */
+    return Promise.resolve({ matrix: buildHaversineMatrix(pts), source: 'haversine' });
+  }
 
-  return impl(url).then(function (res) {
-    if (!res || res.ok === false) throw new Error('osrm: bad http response');
+  return impl(gw.url + '/v1/matrix', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Ingest-Key': gw.key },
+    body: JSON.stringify(buildValhallaMatrixRequest(pts))
+  }).then(function (res) {
+    if (!res || res.ok === false) throw new Error('valhalla: bad http response');
     return res.json();
   }).then(function (json) {
-    if (!json || json.code !== 'Ok' || !Array.isArray(json.durations)) {
-      throw new Error('osrm: bad payload');
-    }
-    var d = json.durations;
-    if (d.length !== n) throw new Error('osrm: bad matrix shape');
-    for (var i = 0; i < n; i++) {
-      if (!Array.isArray(d[i]) || d[i].length !== n) {
-        throw new Error('osrm: bad matrix shape');
-      }
-    }
-    /* durations are in seconds; null = unreachable -> Infinity */
-    var matrix = d.map(function (row) {
-      return row.map(function (v) {
-        return (v === null || v === undefined) ? Infinity : Number(v);
-      });
-    });
-    return { matrix: matrix, source: 'osrm' };
+    /* times are in seconds; unreachable -> Infinity */
+    return { matrix: parseValhallaMatrix(json, n), source: 'valhalla' };
   }).catch(function () {
     /* ANY failure -> offline-safe haversine fallback */
     return { matrix: buildHaversineMatrix(pts), source: 'haversine' };
@@ -1457,13 +1545,12 @@ function remapMatrixToOrder(hit, points) {
   return out;
 }
 
-/* OSRM matrix with a client-side cache (CODING_RULES §6: matrices 1h).
+/* Drive-time matrix with a client-side cache (CODING_RULES §6: matrices 1h).
  * cache: a makeTtlCache whose values are {matrix, source} as returned by
  * buildDurationMatrix. Cache hits skip the network entirely. Only real
- * OSRM results are stored — a haversine fallback is never cached, so a
- * throttled demo server keeps getting retried on later edits (today's
- * behavior). Store failures are swallowed; a dead cache is a pure
- * slowdown, never an error. */
+ * drive-time results are stored — a haversine fallback is never cached, so
+ * a failed gateway keeps getting retried on later edits. Store failures
+ * are swallowed; a dead cache is a pure slowdown, never an error. */
 function cachedDurationMatrix(points, fetchFn, cache) {
   var sig = matrixCacheKey(points);
   var hit = null;
@@ -1479,7 +1566,7 @@ function cachedDurationMatrix(points, fetchFn, cache) {
     /* can't align (e.g. legacy entry) — fall through to refetch below */
   }
   return buildDurationMatrix(points, fetchFn).then(function (r) {
-    if (cache && sig && r && r.source === 'osrm') {
+    if (cache && sig && r && isSecondsSource(r.source)) {
       try { cache.set(sig, { matrix: r.matrix, source: r.source, order: matrixOrderKey(points) }); } catch { /* cache is best-effort */ }
     }
     return r;
@@ -1503,7 +1590,7 @@ function ensureGeocodeNeeded(stops, startEp, origin) {
 }
 
 /* Total drive minutes for `order` (array of point indices) over a matrix.
- * osrm matrices hold seconds; haversine matrices hold miles
+ * Seconds-source matrices hold seconds; haversine matrices hold miles
  * (road miles ~= haversine x 1.35, at 30 mph avg -> minutes = miles x 2.7).
  * Unreachable legs (Infinity) are skipped, never poison the total. */
 var HAVERSINE_MIN_PER_MI = 2.7;
@@ -1513,7 +1600,7 @@ function routeMinutesForOrder(matrix, order, source) {
   for (var k = 0; k < ord.length - 1; k++) {
     var v = matrix && matrix[ord[k]] ? matrix[ord[k]][ord[k + 1]] : null;
     if (v === null || v === undefined || !isFinite(v)) continue;
-    total += (source === 'osrm') ? v / 60 : v * HAVERSINE_MIN_PER_MI;
+    total += isSecondsSource(source) ? v / 60 : v * HAVERSINE_MIN_PER_MI;
   }
   return total;
 }
@@ -1784,6 +1871,11 @@ var RouteCore = {
   buildHaversineMatrix: buildHaversineMatrix,
   optimizeOrder: optimizeOrder,
   buildDurationMatrix: buildDurationMatrix,
+  buildValhallaMatrixRequest: buildValhallaMatrixRequest,
+  flattenValhallaPairs: flattenValhallaPairs,
+  parseValhallaMatrix: parseValhallaMatrix,
+  isSecondsSource: isSecondsSource,
+  matrixGatewayConfig: matrixGatewayConfig,
   cachedDurationMatrix: cachedDurationMatrix,
   optimizeRouteAsync: optimizeRouteAsync,
   normalizeGeocodeKey: normalizeGeocodeKey,
