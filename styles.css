@@ -253,6 +253,7 @@ main { padding: 14px 14px 0; max-width: 640px; margin: 0 auto; }
 .chip.confirm { background: var(--accent-dim); color: #d6c9ff; border-color: rgba(124, 92, 255, .4); }
 .chip.eta { background: rgba(56, 189, 248, .12); color: #7dd3fc; border-color: rgba(56, 189, 248, .25); }
 .chip.drive { background: rgba(167, 139, 250, .12); color: #c4b5fd; border-color: rgba(167, 139, 250, .25); }
+.chip.late { background: var(--red-dim); color: var(--red); border-color: rgba(248, 113, 113, .3); }
 .drive-summary {
   display: flex; gap: 12px; align-items: center; justify-content: center;
   padding: 8px 16px; margin: 0 0 8px; font-size: 13px; color: var(--text-dim);

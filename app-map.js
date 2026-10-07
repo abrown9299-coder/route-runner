@@ -110,7 +110,7 @@
       },
     });
     return new CachedLayer(TILE_TEMPLATE, {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>', maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>', maxZoom: 16, maxNativeZoom: 14,
     });
   }
 

@@ -1,5 +1,5 @@
 /* app-boot.js — boot sequence (split from app.js 2026-10-06) */
-/* global $:writable, APP_VERSION:writable, Stats:writable, adoptDevicePos:writable, checkForUpdate:writable, checkinAtGps:writable, driveAwayAtGps:writable, ensureDevicePos:writable, isSameDay:writable, isWorkMode:writable, load:writable, loadSharedRoute:writable, markDirty:writable, maybeAutoReopt:writable, render:writable, restoreUIState:writable, save:writable, saveTileMeta:writable, saveUIState:writable, schedulePreDriveTime:writable, settings:writable, startAutoCheckinWatch:writable, startDeviceTracking:writable, startDriveAwayWatch:writable, state:writable, toast:writable, wipeRouteData:writable */ // eslint-disable-line no-unused-vars
+/* global $:writable, APP_VERSION:writable, Stats:writable, adoptDevicePos:writable, checkForUpdate:writable, checkinAtGps:writable, driveAwayAtGps:writable, ensureDevicePos:writable, isSameDay:writable, isWorkMode:writable, load:writable, loadSharedRoute:writable, markDirty:writable, maybeAutoReopt:writable, render:writable, restoreUIState:writable, save:writable, saveTileMeta:writable, saveUIState:writable, schedulePreDriveTime:writable, settings:writable, startAutoCheckinWatch:writable, startDeviceTracking:writable, startDriveAwayWatch:writable, startLiveEta:writable, state:writable, toast:writable, wipeRouteData:writable */ // eslint-disable-line no-unused-vars
 'use strict';
 
   function bootApp() {
@@ -29,6 +29,10 @@
     if (settings.autoCheckin && isWorkMode()) startAutoCheckinWatch();
     // Live blue-dot tracking: keep the map's "you are here" dot moving.
     startDeviceTracking();
+    // Live ETA: drive clock + silent matrix refresh keep stop-card times
+    // fresh with zero user action (2026-10-07). Guarded: some test
+    // harnesses load app-boot.js without app-live.js.
+    if (typeof startLiveEta === 'function') startLiveEta();
     // Drive-away auto-complete delivery while checked in (both modes):
     // 60 s poll + visibilitychange cover iOS background suspension.
     startDriveAwayWatch();

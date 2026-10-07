@@ -1,6 +1,6 @@
 /* app-optimize.js — route optimization flow (split from app.js 2026-10-06) */
 /* global RouteCore: readonly */
-/* global $:writable, APP_VERSION:writable, LS_HIST:writable, LS_TRAFFIC:writable, _crumb:writable, _event:writable, applyUpdate:writable, attachAddressDropdown:writable, clearDriveAway:writable, collectJobTypes:writable, departMinForOpt:writable, endResolved:writable, ensureGeocoded:writable, esc:writable, geocodeInflight:writable, getEndCoords:writable, isWorkMode:writable, makeTrafficFn:writable, markDirty:writable, matrixCache:writable, optInFlight:writable, refreshMap:writable, render:writable, save:writable, serviceMinFor:writable, settings:writable, showRiskWarning:writable, ssDel:writable, state:writable, stopLabel:writable, toast:writable, uid:writable */ // eslint-disable-line no-unused-vars
+/* global $:writable, APP_VERSION:writable, LS_HIST:writable, LS_TRAFFIC:writable, _crumb:writable, _event:writable, applyUpdate:writable, attachAddressDropdown:writable, clearDriveAway:writable, collectJobTypes:writable, departMinForOpt:writable, devicePos:writable, endResolved:writable, ensureDevicePos:writable, ensureGeocoded:writable, esc:writable, geocodeInflight:writable, getEndCoords:writable, isWorkMode:writable, makeTrafficFn:writable, markDirty:writable, matrixCache:writable, optInFlight:writable, refreshMap:writable, render:writable, save:writable, serviceMinFor:writable, settings:writable, showRiskWarning:writable, ssDel:writable, state:writable, stopLabel:writable, toast:writable, uid:writable */ // eslint-disable-line no-unused-vars
 /* exported doOptimize, maybeAutoReopt, saveHistory, loadTrafficModel, originLabel, loadSharedRoute, TILE_TEMPLATE, TILES_CACHE, LS_TILE_META, LS_TILE_CFG, TILE_BUDGET_BYTES, TILE_BUDGET_TILES, tileMeta, tileMetaDirty, onOriginPick */
 'use strict';
 
@@ -37,9 +37,26 @@
       const ci = state.checkedIn;
       const ciStop = ci ? located.find((s) => s.id === ci.stopId && !s.done) : null;
       const destStops = ciStop ? located.filter((s) => s.id !== ciStop.id) : located;
+      // 2026-10-07: live-origin fix. state.origin.lat/lng is adopted ONCE from
+      // the first GPS fix (app-gps.js) and goes stale as the driver moves, so
+      // ETAs/drive-times were computed from where the driver WAS, not where
+      // they ARE (e.g. "25 min" shown when 4 min away). At optimize time,
+      // prefer the live device position for a 'gps' origin. A user-set
+      // address origin is always respected, and state.origin itself is never
+      // mutated (return-to-start still targets the adopted origin).
+      let originLat = state.origin.lat, originLng = state.origin.lng;
+      if (!ciStop && state.origin.type === 'gps') {
+        let live = (typeof devicePos !== 'undefined') ? devicePos : null;
+        if (!live) {
+          try { live = await ensureDevicePos(); } catch { live = null; }
+        }
+        if (live && live.lat != null && live.lng != null) {
+          originLat = live.lat; originLng = live.lng;
+        }
+      }
       const points = [{
-        lat: ciStop ? ciStop.lat : state.origin.lat,
-        lng: ciStop ? ciStop.lng : state.origin.lng,
+        lat: ciStop ? ciStop.lat : originLat,
+        lng: ciStop ? ciStop.lng : originLng,
         _stopId: null,
       }].concat(destStops.map((s) => ({ lat: s.lat, lng: s.lng, _stopId: s.id })));
       // origin may lack coords (GPS denied) — fall back to first stop as start

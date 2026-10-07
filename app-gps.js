@@ -1,7 +1,7 @@
 /* app-gps.js — device GPS tracking, dev-mode simulator (split from app.js 2026-10-06) */
 /* global RouteCore: readonly */
 /* global bufferProbe, noteProbeFix: writable */
-/* global $:writable, checkProximityCheckin:writable, deviceDot:writable, devicePos:writable, deviceWatchId:writable, driveAwayAtGps:writable, ensureDevicePos:writable, evaluateDriveAway:writable, haversineM:writable, mapObj:writable, markDirty:writable, noteLegPosition:writable, refreshMap:writable, render:writable, save:writable, state:writable, toast:writable */ // eslint-disable-line no-unused-vars
+/* global $:writable, LiveEta:writable, checkProximityCheckin:writable, deviceDot:writable, devicePos:writable, deviceWatchId:writable, driveAwayAtGps:writable, ensureDevicePos:writable, evaluateDriveAway:writable, haversineM:writable, mapObj:writable, markDirty:writable, noteLegPosition:writable, refreshMap:writable, render:writable, save:writable, state:writable, toast:writable */ // eslint-disable-line no-unused-vars
 /* exported startDeviceTracking, adoptDevicePos, devMode, setDevicePosFromGps, checkinAtGps, legTrack, STATIONARY_DISCARD_MS */
 'use strict';
 
@@ -255,6 +255,22 @@
     $('devClear').onclick = devClear;
     $('devSimStart').onclick = devSimStart;
     $('devSimStop').onclick = () => devSimStop('Simulation stopped');
+    /* Live-ETA test tools (2026-10-07): drive the countdown without moving.
+     * Guarded — no-ops if app-live.js isn't loaded. */
+    $('devClockPlus').onclick = () => {
+      if (typeof LiveEta === 'undefined') return;
+      LiveEta.advance(5);
+      toast('Drive clock +5 min');
+    };
+    $('devLiveState').onclick = () => {
+      const el = $('devLiveLine');
+      if (!el || typeof LiveEta === 'undefined') return;
+      const st = LiveEta.debug();
+      el.textContent = 'target=' + (st.firstId || '—') +
+        ' · driven=' + st.drivenMin.toFixed(2) + 'm' +
+        ' · remaining=' + (st.remainingMin == null ? '—' : st.remainingMin.toFixed(1) + 'm') +
+        ' · shift=' + st.shiftMin.toFixed(1) + 'm';
+    };
     $('devExit').onclick = devExit;
   }
   wireDevMode();

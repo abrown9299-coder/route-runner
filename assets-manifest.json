@@ -1,6 +1,6 @@
 {
-  "manifestVersion": "20261007-165229",
-  "generatedAt": "2026-10-07T16:52:30.463652+00:00",
+  "manifestVersion": "20261007-192454",
+  "generatedAt": "2026-10-07T19:24:55.361867+00:00",
   "assets": [
     {
       "path": "vendor/leaflet.min.js",
@@ -56,13 +56,13 @@
   "shell": [
     {
       "path": "index.html",
-      "sha256": "fc2829964649742be527f0f97b40d7c5fff8da7da2649a97ff07d7fe0c635dfe",
-      "bytes": 25342
+      "sha256": "bdba423494065024ba163c5398e61c46a64ecd1b16ab96deb2521692489eefe1",
+      "bytes": 25794
     },
     {
       "path": "styles.css",
-      "sha256": "4c47ce2941f7a1946793d098fc3affe4e9954a1c1233999136b8becb0bded9d9",
-      "bytes": 23345
+      "sha256": "5c2d73c9f3b3c087bf3149e8de417b533492145d8d3a456aa9760b8e8250de20",
+      "bytes": 23446
     },
     {
       "path": "core.js",
@@ -106,13 +106,13 @@
     },
     {
       "path": "app-state.js",
-      "sha256": "8e6a0fb88f03998ce419ab9525a30453579a5d23ed52006ff84b9fc35273933e",
+      "sha256": "7af36b7048fd40d9394351b71d5f1e6a8e874e7b6cf8047cf995bde0673e0fcf",
       "bytes": 11644
     },
     {
       "path": "app-stops.js",
-      "sha256": "48950bb89797b75927185f0674761d34c7c21e696b82c24b73bd4c56d2534b8b",
-      "bytes": 25420
+      "sha256": "ba21b20dd5da7b0fe0e04b70a39e67f2ba5b54840224acc9419650f982359977",
+      "bytes": 26796
     },
     {
       "path": "app-windows.js",
@@ -141,8 +141,8 @@
     },
     {
       "path": "app-gps.js",
-      "sha256": "4483eae71089c1f41ff5e259fe92defc312bf5107d09dd516d8ff2dd0693f343",
-      "bytes": 12708
+      "sha256": "af1d32c1b9c3bc5495e605515046893df130999346ab63f3e0720dcba4ecdb32",
+      "bytes": 13458
     },
     {
       "path": "app-probes.js",
@@ -156,13 +156,13 @@
     },
     {
       "path": "app-optimize.js",
-      "sha256": "e75379197561ba0b6d2a4c44b199fb7f18fb71258292623139ea8e9099da7830",
-      "bytes": 33213
+      "sha256": "1c46bc9b45d3c0222e895e0386eb69b4878de5daca5dccccf579e097e3e93565",
+      "bytes": 34207
     },
     {
       "path": "app-map.js",
-      "sha256": "3de89ced200d3a068a9c6071a001bb022ac394499883d0cd7b57592a2587861b",
-      "bytes": 11637
+      "sha256": "4dba2ed5e5141ec5f1d3575c3339be8cf3112f63eda5db48cb960d4e1372968b",
+      "bytes": 11656
     },
     {
       "path": "app-route.js",
@@ -181,8 +181,8 @@
     },
     {
       "path": "app-boot.js",
-      "sha256": "2133f668eb18a7e5641c087a781248b96a68e59f2970be5831650d209d00e669",
-      "bytes": 4842
+      "sha256": "afbd9b5b0bfcfd9c4a8d9c56b48fa1395f72fb125c1adf856e9a0f4d82b81535",
+      "bytes": 5122
     },
     {
       "path": "manifest.json",

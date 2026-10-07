@@ -1,8 +1,34 @@
 /* app-stops.js — stops list, service times, render (split from app.js 2026-10-06) */
 /* global RouteCore: readonly */
-/* global $:writable, _crumb:writable, _event:writable, clearDriveAway:writable, endLegTracking:writable, endResolved:writable, ensureGeocoded:writable, esc:writable, geocodeInflight:writable, isWorkMode:writable, legTrack:writable, locatedPoints:writable, mapObj:writable, matrixCache:writable, maybeAutoReopt:writable, openMapForPin:writable, openSetSheet:writable, openWindowPopup:writable, originLabel:writable, promptNickname:writable, refreshMap:writable, save:writable, settings:writable, state:writable, trackDepartureLeg:writable, wipeRouteData:writable */ // eslint-disable-line no-unused-vars
+/* global $:writable, LiveEta:writable, _crumb:writable, _event:writable, clearDriveAway:writable, endLegTracking:writable, endResolved:writable, ensureGeocoded:writable, esc:writable, geocodeInflight:writable, isWorkMode:writable, legTrack:writable, locatedPoints:writable, mapObj:writable, matrixCache:writable, maybeAutoReopt:writable, openMapForPin:writable, openSetSheet:writable, openWindowPopup:writable, originLabel:writable, promptNickname:writable, refreshMap:writable, save:writable, settings:writable, state:writable, trackDepartureLeg:writable, wipeRouteData:writable */ // eslint-disable-line no-unused-vars
 /* exported stopLabel, SVC_MIN, SVC_MAX, SVC_STEP, serviceMinFor, collectJobTypes, departMinForOpt, markDirty, schedulePreDriveTime, toast, editingEndpoint, openEndpointEditor, updateEpStar, render, winStopId */
 'use strict';
+
+  /* Live-ETA accessor with fallback. app-live.js loads after this module, so
+   * the check must happen at call time, not load time. When app-live.js is
+   * absent (some test harnesses), render falls back to raw schedule values
+   * instead of throwing. */
+  var LiveEtaFallback = {
+    driveMin: function (sid) {
+      var s = state.lastSchedule;
+      return (s && s.driveTo && s.driveTo[sid] != null) ? s.driveTo[sid] : null;
+    },
+    arrivalMin: function (sid) {
+      var s = state.lastSchedule;
+      return (s && s.arrivals && s.arrivals[sid] != null) ? s.arrivals[sid] : null;
+    },
+    isLate: function (st) {
+      if (!st || st.done || !st.confirmed || st.twEnd == null) return false;
+      var a = LiveEtaFallback.arrivalMin(st.id);
+      return a != null && a > st.twEnd;
+    },
+    fmtDrive: function (min) {
+      return '🚗 ' + Math.round(min) + ' min';
+    },
+  };
+  function LE() {
+    return (typeof LiveEta !== 'undefined') ? LiveEta : LiveEtaFallback;
+  }
 
   function stopLabel(s) {
     const a = [s.street, s.city, s.state && s.zip ? s.state + ' ' + s.zip : (s.state || s.zip)]
@@ -247,12 +273,17 @@
           (s.isLast ? '<span class="chip last">🏁 last stop</span>' : '') +
           (work && s.confirmed && s.twStart != null && s.twEnd != null
             ? '<span class="chip confirm">✓ ' + esc(fmtWindow(s)) + '</span>' : '') +
-          (!s.done && state.optimized && state.lastSchedule && state.lastSchedule.arrivals &&
-           state.lastSchedule.arrivals[s.id] != null
-            ? '<span class="chip eta">→ arr ~' + esc(RouteCore.formatClock(Math.round(state.lastSchedule.arrivals[s.id]))) + '</span>' : '') +
-          (!s.done && state.optimized && state.lastSchedule && state.lastSchedule.driveTo &&
-           state.lastSchedule.driveTo[s.id] != null
-            ? '<span class="chip drive">🚗 ' + Math.round(state.lastSchedule.driveTo[s.id]) + ' min</span>' : '') +
+          (!s.done && state.optimized && LE().arrivalMin(s.id) != null
+            ? '<span class="chip eta" data-chip="eta">→ arr ~' + esc(RouteCore.formatClock(Math.round(LE().arrivalMin(s.id)))) + '</span>' : '') +
+          (!s.done && state.optimized && LE().driveMin(s.id) != null
+            ? '<span class="chip drive" data-chip="drive">' + LE().fmtDrive(LE().driveMin(s.id)) + '</span>' : '') +
+          /* 2026-10-07: late-window indicator. Shows when the projected
+           * arrival falls after the confirmed appointment window so a missed
+           * notification is still visible at a glance. Vanishes with the
+           * stop (only rendered for !s.done). Live-evaluated: it can appear
+           * or clear as the drive clock moves. */
+          (LE().isLate(s)
+            ? '<span class="chip late" data-chip="late" title="Projected arrival is after this appointment window">⚠️ late</span>' : '') +
           (needsPin ? '<span class="chip warn">📍 no location — tap to drop pin</span>' : '') +
           (!needsPin && s.approx ? '<span class="chip">≈ area</span>' : '') +
           (work && s.note ? '<span class="chip">📝 ' + esc(s.note) + '</span>' : '') +
