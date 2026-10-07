@@ -1,5 +1,6 @@
 /* app-gps.js — device GPS tracking, dev-mode simulator (split from app.js 2026-10-06) */
 /* global RouteCore: readonly */
+/* global bufferProbe, noteProbeFix: writable */
 /* global $:writable, checkProximityCheckin:writable, deviceDot:writable, devicePos:writable, deviceWatchId:writable, driveAwayAtGps:writable, ensureDevicePos:writable, evaluateDriveAway:writable, haversineM:writable, mapObj:writable, markDirty:writable, noteLegPosition:writable, refreshMap:writable, render:writable, save:writable, state:writable, toast:writable */ // eslint-disable-line no-unused-vars
 /* exported startDeviceTracking, adoptDevicePos, devMode, setDevicePosFromGps, checkinAtGps, legTrack, STATIONARY_DISCARD_MS */
 'use strict';
@@ -16,6 +17,19 @@
         adoptDevicePos();
         noteLegPosition(devicePos); // traffic learning: stationary detection
         driveAwayAtGps(pos); // drive-away auto-complete (no-op unless checked in)
+        // Traffic probes (2026-10-07): anonymous, coarsened at capture.
+        try {
+          if (typeof noteProbeFix === 'function' && typeof bufferProbe === 'function') {
+            bufferProbe(noteProbeFix({
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              accuracy: pos.coords.accuracy,
+              speed: pos.coords.speed,
+              heading: pos.coords.heading,
+              t: pos.timestamp || Date.now(),
+            }));
+          }
+        } catch {}
       }, () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 });
     } catch {}
   }

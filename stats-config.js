@@ -1,6 +1,6 @@
 /* stats-config.js — build placeholders, LS keys, caps, enums, crumbs (split from stats.js 2026-10-06) */
 'use strict';
-/* exported INGEST_KEY, GATEWAY, KEY_PLACEHOLDER, GATEWAY_PLACEHOLDER, LS_DEVICE, LS_QUEUE, LS_ERRORS, LS_CRUMBS, LS_ERR_WINDOW, LS_DROPPED, QUEUE_CAP, ERR_QUEUE_CAP, BATCH_MAX, ERR_RATE_MAX, ERR_RATE_WINDOW_MS, FLUSH_MS, MSG_MAX, STACK_MAX, STACK_FRAMES, EVENTS_PATH, ERRORS_PATH, EVENT_TYPES, EVENT_META_KEYS, ENGINES, ERROR_KINDS */
+/* exported INGEST_KEY, GATEWAY, KEY_PLACEHOLDER, GATEWAY_PLACEHOLDER, LS_DEVICE, LS_QUEUE, LS_PROBE_QUEUE, LS_ERRORS, LS_CRUMBS, LS_ERR_WINDOW, LS_DROPPED, QUEUE_CAP, ERR_QUEUE_CAP, BATCH_MAX, ERR_RATE_MAX, ERR_RATE_WINDOW_MS, FLUSH_MS, PROBE_FLUSH_MS, PROBE_BATCH_MAX, MSG_MAX, STACK_MAX, STACK_FRAMES, EVENTS_PATH, ERRORS_PATH, EVENT_TYPES, EVENT_META_KEYS, ENGINES, ERROR_KINDS */
 
 /* RouteRunner stats.js — anonymous usage statistics + automatic error reporting.
  *
@@ -43,6 +43,7 @@
   /* ---------- constants ---------- */
   var LS_DEVICE = 'rr.stats.device_id';
   var LS_QUEUE = 'rr.stats.queue';       // pending events (JSON array)
+  var LS_PROBE_QUEUE = 'rr.stats.probe_queue'; // pending traffic probes (JSON array, separate flush path)
   var LS_ERRORS = 'rr.stats.errors';     // pending error reports (JSON array)
   var LS_CRUMBS = 'rr.stats.crumbs';     // persisted breadcrumb trail
   var LS_ERR_WINDOW = 'rr.stats.err_window'; // sliding-window timestamps for the 10/hr error cap
@@ -54,6 +55,8 @@
   var ERR_RATE_MAX = 10;    // max error reports per device per hour (client-side)
   var ERR_RATE_WINDOW_MS = 3600 * 1000;
   var FLUSH_MS = 60000;     // periodic flush interval
+  var PROBE_FLUSH_MS = 180000; // traffic-probe flush interval (3 min)
+  var PROBE_BATCH_MAX = 50;    // max probes per traffic_probes event
   var MSG_MAX = 500, STACK_MAX = 2000, STACK_FRAMES = 12;
 
   var EVENTS_PATH = '/v1/events';
@@ -91,12 +94,13 @@
   var CRUMB_SET = {};
   CRUMB_NAMES.forEach(function (n) { CRUMB_SET[n] = true; });
 
-  var EVENT_TYPES = ['app_boot', 'route_optimized', 'stop_completed', 'check_in'];
+  var EVENT_TYPES = ['app_boot', 'route_optimized', 'stop_completed', 'check_in', 'traffic_probes'];
   var EVENT_META_KEYS = {
     app_boot: [],
     route_optimized: ['stop_count', 'had_windows', 'engine'],
     stop_completed: [],
     check_in: [],
+    traffic_probes: ['probes'],
   };
   var ENGINES = ['backend', 'local'];
   var ERROR_KINDS = ['onerror', 'unhandledrejection'];

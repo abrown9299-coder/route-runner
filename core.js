@@ -1310,8 +1310,10 @@ function buildDurationMatrix(points, fetchFn) {
     if (!res || res.ok === false) throw new Error('valhalla: bad http response');
     return res.json();
   }).then(function (json) {
-    /* times are in seconds; unreachable -> Infinity */
-    return { matrix: parseValhallaMatrix(json, n), source: 'valhalla' };
+    /* times are in seconds; unreachable -> Infinity. The traffic block
+     * (confidence/incidents, 2026-10-07) rides along for the UI badges. */
+    return { matrix: parseValhallaMatrix(json, n), source: 'valhalla',
+             traffic: (json && json.traffic) || null };
   }).catch(function () {
     /* ANY failure -> offline-safe haversine fallback */
     return { matrix: buildHaversineMatrix(pts), source: 'haversine' };
@@ -1343,6 +1345,7 @@ function optimizeRouteAsync(points, opts) {
       source: r.source,
       matrix: r.matrix, /* v1.4: exposed so callers can score any order */
       durMin: durMin,   /* v1.9: drive minutes, parallel to matrix */
+      traffic: r.traffic || null, /* 2026-10-07: confidence/incidents for UI badges */
       schedule: (sctx.anyWindow || o.forceSchedule) ? simulateSchedule(order, durMin, sctx) : null
     };
   });

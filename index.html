@@ -6,13 +6,13 @@
 <title>RouteRunner</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261007-143631">
+<meta name="app-version" content="20261007-163201">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" type="image/png" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20261007-143631">
+<link rel="stylesheet" href="styles.css?v=20261007-163201">
 <link rel="stylesheet" href="vendor/leaflet.css">
 <script>
 /* Stale-code gate: runs before anything else. If this HTML is stale
@@ -24,7 +24,7 @@
     var local = stamped ? stamped.getAttribute('content') : '';
     // Skip if this is already a cache-busted reload (avoid loops).
     if (/[?&]v=/.test(location.search)) return;
-    if (!local || local.indexOf('20261007-143631') !== -1) return; // dev, unstamped
+    if (!local || local.indexOf('20261007-163201') !== -1) return; // dev, unstamped
     fetch('version.json', { cache: 'no-store' }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (info) {
@@ -502,28 +502,29 @@
   })();
 </script>
 <script src="vendor/Sortable.min.js"></script>
-<script src="core.js?v=20261007-143631"></script>
-<script src="ocr.js?v=20261007-143631"></script>
-<script src="install.js?v=20261007-143631"></script>
-<script src="stats-config.js?v=20261007-143631"></script>
-<script src="stats-data.js?v=20261007-143631"></script>
-<script src="stats-sanitize.js?v=20261007-143631"></script>
-<script src="stats-store.js?v=20261007-143631"></script>
-<script src="stats-report.js?v=20261007-143631"></script>
-<script src="app-state.js?v=20261007-143631"></script>
-<script src="app-stops.js?v=20261007-143631"></script>
-<script src="app-windows.js?v=20261007-143631"></script>
-<script src="app-search.js?v=20261007-143631"></script>
-<script src="app-sheets.js?v=20261007-143631"></script>
-<script src="app-ocr.js?v=20261007-143631"></script>
-<script src="app-geocode.js?v=20261007-143631"></script>
-<script src="app-gps.js?v=20261007-143631"></script>
-<script src="app-traffic.js?v=20261007-143631"></script>
-<script src="app-optimize.js?v=20261007-143631"></script>
-<script src="app-map.js?v=20261007-143631"></script>
-<script src="app-route.js?v=20261007-143631"></script>
-<script src="app-saved.js?v=20261007-143631"></script>
-<script src="app-settings.js?v=20261007-143631"></script>
-<script src="app-boot.js?v=20261007-143631"></script>
+<script src="core.js?v=20261007-163201"></script>
+<script src="ocr.js?v=20261007-163201"></script>
+<script src="install.js?v=20261007-163201"></script>
+<script src="stats-config.js?v=20261007-163201"></script>
+<script src="stats-data.js?v=20261007-163201"></script>
+<script src="stats-sanitize.js?v=20261007-163201"></script>
+<script src="stats-store.js?v=20261007-163201"></script>
+<script src="stats-report.js?v=20261007-163201"></script>
+<script src="app-state.js?v=20261007-163201"></script>
+<script src="app-stops.js?v=20261007-163201"></script>
+<script src="app-windows.js?v=20261007-163201"></script>
+<script src="app-search.js?v=20261007-163201"></script>
+<script src="app-sheets.js?v=20261007-163201"></script>
+<script src="app-ocr.js?v=20261007-163201"></script>
+<script src="app-geocode.js?v=20261007-163201"></script>
+<script src="app-probes.js"></script>
+<script src="app-gps.js?v=20261007-163201"></script>
+<script src="app-traffic.js?v=20261007-163201"></script>
+<script src="app-optimize.js?v=20261007-163201"></script>
+<script src="app-map.js?v=20261007-163201"></script>
+<script src="app-route.js?v=20261007-163201"></script>
+<script src="app-saved.js?v=20261007-163201"></script>
+<script src="app-settings.js?v=20261007-163201"></script>
+<script src="app-boot.js?v=20261007-163201"></script>
 </body>
 </html>

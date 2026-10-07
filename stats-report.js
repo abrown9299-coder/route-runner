@@ -1,5 +1,5 @@
 /* stats-report.js — reporting pipeline + window.Stats (split from stats.js 2026-10-06) */
-/* global BATCH_MAX, CRUMB_NAMES, CRUMB_SET, ENGINES, ERRORS_PATH, ERROR_KINDS, ERR_QUEUE_CAP, ERR_RATE_MAX, ERR_RATE_WINDOW_MS, EVENTS_PATH, EVENT_META_KEYS, EVENT_TYPES, FLUSH_MS, GATEWAY, GATEWAY_PLACEHOLDER, INGEST_KEY, KEY_PLACEHOLDER, LS_CRUMBS, LS_DROPPED, LS_ERRORS, LS_ERR_WINDOW, LS_QUEUE, QUEUE_CAP, appVersion, basename, deviceType, getDeviceId, lsJsonGet, lsJsonSet, sanitizeMessage, sanitizeStack: readonly */
+/* global BATCH_MAX, CRUMB_NAMES, CRUMB_SET, ENGINES, ERRORS_PATH, ERROR_KINDS, ERR_QUEUE_CAP, ERR_RATE_MAX, ERR_RATE_WINDOW_MS, EVENTS_PATH, EVENT_META_KEYS, EVENT_TYPES, FLUSH_MS, PROBE_BATCH_MAX, PROBE_FLUSH_MS, GATEWAY, GATEWAY_PLACEHOLDER, INGEST_KEY, KEY_PLACEHOLDER, LS_CRUMBS, LS_DROPPED, LS_ERRORS, LS_ERR_WINDOW, LS_PROBE_QUEUE, LS_QUEUE, QUEUE_CAP, appVersion, basename, deviceType, getDeviceId, lsJsonGet, lsJsonSet, sanitizeMessage, sanitizeStack, setProbeIntervalMs: readonly */
 'use strict';
 
 
@@ -95,12 +95,82 @@
     var batch = q.slice(0, BATCH_MAX);
     var payload = basePayload();
     payload.events = batch;
-    return postJson(GATEWAY + EVENTS_PATH, payload).then(function (ok) {
-      if (!ok) return 'failed';
+    return postJsonFull(GATEWAY + EVENTS_PATH, payload).then(function (res) {
+      if (!res || !res.ok) return 'failed';
+      applyProbeKillSwitch(res.body);
       // Re-read: the queue may have grown during the POST. Remove exactly
       // the sent slice (new events append at the end).
       var rest = lsJsonGet(LS_QUEUE, []);
       if (Array.isArray(rest)) lsJsonSet(LS_QUEUE, rest.slice(batch.length));
+      return 'sent';
+    });
+  }
+
+  /* POST returning {ok, body} so callers can read server directives
+   * (the probe kill switch). Never rejects, never throws. */
+  function postJsonFull(url, body) {
+    try {
+      if (typeof fetch === 'undefined') return Promise.resolve(null);
+      return fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(function (resp) {
+        if (!resp || !resp.ok) return null;
+        return resp.json().then(
+          function (j) { return { ok: !!(j && j.ok), body: j }; },
+          function () { return { ok: false, body: null }; }
+        );
+      }).catch(function () { return null; });
+    } catch { return Promise.resolve(null); }
+  }
+
+  /* Server kill switch for probe sampling: /v1/events may return
+   * {probe_interval_s: N}. 0 disables sampling; positive sets a fixed
+   * cadence; absent/negative leaves adaptive mode. Never throws. */
+  function applyProbeKillSwitch(body) {
+    try {
+      if (!body || typeof body.probe_interval_s === 'undefined') return;
+      var s = body.probe_interval_s;
+      if (typeof s !== 'number' || !isFinite(s) || s < 0) return;
+      if (typeof setProbeIntervalMs === 'function') {
+        setProbeIntervalMs(s === 0 ? 0 : Math.round(s * 1000));
+      }
+    } catch {}
+  }
+
+  /* Queue raw probes to the dedicated probe queue (separate from the stats
+   * event queue — probes flush to /v1/traffic/probes on their own cadence).
+   * Probes must already be coarsened/filtered by app-probes.js. */
+  function queueProbes(probes) {
+    if (!S.inited || !S.enabled) return false;
+    if (!Array.isArray(probes) || !probes.length) return false;
+    var q = lsJsonGet(LS_PROBE_QUEUE, []);
+    if (!Array.isArray(q)) q = [];
+    for (var i = 0; i < probes.length; i++) q.push(probes[i]);
+    while (q.length > QUEUE_CAP) q.shift(); // drop oldest on overflow
+    lsJsonSet(LS_PROBE_QUEUE, q);
+    return true;
+  }
+
+  var PROBES_PATH = '/v1/traffic/probes';
+
+  /* Flush the probe queue to /v1/traffic/probes. Same semantics as
+   * flushEvents: failure keeps the queue for the next trigger. */
+  function flushProbes() {
+    if (!S.inited || !S.enabled) return Promise.resolve(false);
+    try {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return Promise.resolve(false);
+    } catch {}
+    var q = lsJsonGet(LS_PROBE_QUEUE, []);
+    if (!Array.isArray(q) || !q.length) return Promise.resolve('empty');
+    var batch = q.slice(0, PROBE_BATCH_MAX);
+    var payload = basePayload();
+    payload.probes = batch;
+    return postJson(GATEWAY + PROBES_PATH, payload).then(function (ok) {
+      if (!ok) return 'failed';
+      var rest = lsJsonGet(LS_PROBE_QUEUE, []);
+      if (Array.isArray(rest)) lsJsonSet(LS_PROBE_QUEUE, rest.slice(batch.length));
       return 'sent';
     });
   }
@@ -178,6 +248,17 @@
         }
         lsJsonSet(LS_ERRORS, kept);
       }
+      // Probe queue: best-effort beacon flush on pagehide.
+      var pq = lsJsonGet(LS_PROBE_QUEUE, []);
+      if (Array.isArray(pq) && pq.length) {
+        var pb = pq.slice(0, PROBE_BATCH_MAX);
+        var ppayload = basePayload();
+        ppayload.probes = pb;
+        if (beaconSend(GATEWAY + PROBES_PATH, ppayload)) {
+          var prest = lsJsonGet(LS_PROBE_QUEUE, []);
+          if (Array.isArray(prest)) lsJsonSet(LS_PROBE_QUEUE, prest.slice(pb.length));
+        }
+      }
     } catch {}
   }
 
@@ -211,6 +292,35 @@
       } else if (key === 'engine') {
         if (ENGINES.indexOf(v) === -1) return null;
         clean[key] = v;
+      } else if (key === 'probes') {
+        // traffic_probes: array of probe objects, max PROBE_BATCH_MAX.
+        // Each probe: {lat, lon, spd, hdg, t, acc} — validated field by field;
+        // the whole event is dropped if any probe is malformed (never poison).
+        if (!Array.isArray(v) || !v.length || v.length > PROBE_BATCH_MAX) return null;
+        var cleanProbes = [];
+        for (var pi = 0; pi < v.length; pi++) {
+          var p = v[pi];
+          if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
+          var plat = p.lat, plon = p.lon;
+          if (typeof plat !== 'number' || typeof plon !== 'number' ||
+              !isFinite(plat) || !isFinite(plon) ||
+              Math.abs(plat) > 90 || Math.abs(plon) > 180) return null;
+          // Must already be coarsened (3 decimals) — reject precise coords.
+          if (Math.round(plat * 1000) !== plat * 1000 ||
+              Math.round(plon * 1000) !== plon * 1000) return null;
+          var pspd = p.spd, phdg = p.hdg, pt = p.t, pacc = p.acc;
+          if (typeof pspd !== 'number' || !isFinite(pspd) || pspd < 0 || pspd > 80) return null;
+          if (phdg !== null && (typeof phdg !== 'number' || !isFinite(phdg) || phdg < 0 || phdg >= 360)) return null;
+          if (!Number.isInteger(pt) || pt <= 0) return null;
+          if (pacc !== null && (typeof pacc !== 'number' || !isFinite(pacc) || pacc < 0 || pacc > 1000)) return null;
+          // No extra keys — probes carry exactly the 6 allowed fields.
+          for (var pk in p) {
+            if (Object.prototype.hasOwnProperty.call(p, pk) &&
+                ['lat', 'lon', 'spd', 'hdg', 't', 'acc'].indexOf(pk) === -1) return null;
+          }
+          cleanProbes.push({ lat: plat, lon: plon, spd: pspd, hdg: phdg, t: pt, acc: pacc });
+        }
+        clean[key] = cleanProbes;
       }
     }
     return clean;
@@ -339,7 +449,9 @@
         }
       } catch {}
       try { setInterval(function () { flush(); }, FLUSH_MS); } catch {}
+      try { setInterval(function () { flushProbes(); }, PROBE_FLUSH_MS); } catch {}
       flush(); // boot flush: picks up anything queued while offline
+      flushProbes();
     } catch {}
     return true;
   }
@@ -381,6 +493,8 @@
     init: safe(init),
     isEnabled: safe(isEnabled),
     trackEvent: safe(trackEvent),
+    queueProbes: safe(queueProbes),
+    flushProbes: safe(flushProbes),
     crumb: safe(crumb),
     reportError: safe(reportError),
     installErrorHandlers: safe(installErrorHandlers),

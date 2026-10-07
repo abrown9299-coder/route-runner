@@ -1,6 +1,6 @@
-/* RouteRunner service worker — offline app shell. 20261007-143631 is stamped by dev/deploy.py. */
+/* RouteRunner service worker — offline app shell. 20261007-163201 is stamped by dev/deploy.py. */
 /* global Request: readonly, Response: readonly */
-const CACHE = 'routerunner-20261007-143631';
+const CACHE = 'routerunner-20261007-163201';
 // 2026-10-06: app.js/stats.js were split into modules — must match deploy.py SHELL_FILES.
 const SHELL = [
   './', './index.html', './styles.css',
@@ -9,6 +9,7 @@ const SHELL = [
   './stats-report.js',
   './app-state.js', './app-stops.js', './app-windows.js', './app-search.js',
   './app-sheets.js', './app-ocr.js', './app-geocode.js', './app-gps.js',
+  './app-probes.js',
   './app-traffic.js', './app-optimize.js', './app-map.js', './app-route.js',
   './app-saved.js', './app-settings.js', './app-boot.js',
   './manifest.json', './icon-192.png', './icon-512.png',

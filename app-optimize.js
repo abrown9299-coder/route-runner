@@ -82,7 +82,7 @@
         return s ? serviceMinFor(s) : 0;
       });
       const departMin = departMinForOpt();
-      const { order, source, matrix, durMin, schedule } = await RouteCore.optimizeRouteAsync(points, {
+      const { order, source, matrix, durMin, schedule, traffic } = await RouteCore.optimizeRouteAsync(points, {
         startIdx: Math.max(0, startIdx), firstIdx, lastIdx, fetchFn: fetch.bind(window),
         matrixCache: matrixCache, // 1h client-side matrix cache (perf spec 2026-10-05)
         windows, serviceMin, departMin: departMin, bufferMin: 30,
@@ -189,7 +189,24 @@
         toast(auto ? '⚡ Auto re-optimized — all confirmed windows on track'
                    : '⚡ Optimized — all confirmed windows on track');
       } else {
-        toast(RouteCore.isSecondsSource(source) ? '⚡ Optimized by drive time' : '⚡ Optimized (straight-line — offline mode)');
+        var trafficBadge = '';
+        try {
+          // 2026-10-07: live-traffic confidence badge (E6). Shows when the
+          // backend had real probe data behind the drive times.
+          var conf = traffic && traffic.confidence;
+          if (conf) {
+            var levels = Object.keys(conf);
+            var live = levels.filter(function (k) { return conf[k].level === 'live'; }).length;
+            var recent = levels.filter(function (k) { return conf[k].level === 'recent'; }).length;
+            if (live > 0) trafficBadge = ' · 🟢 live traffic (' + live + ' legs)';
+            else if (recent > 0) trafficBadge = ' · 🟡 recent traffic (' + recent + ' legs)';
+          }
+          var inc = traffic && traffic.incidents;
+          if (inc && inc.length) {
+            trafficBadge += ' · 🔴 ' + inc.length + ' slowdown' + (inc.length === 1 ? '' : 's') + ' reported';
+          }
+        } catch {}
+        toast(RouteCore.isSecondsSource(source) ? '⚡ Optimized by drive time' + trafficBadge : '⚡ Optimized (straight-line — offline mode)');
       }
       }; // end applyOptimization
       /* Re-opt prompt (v1.9.1): true only when the auto engine found a reorder
