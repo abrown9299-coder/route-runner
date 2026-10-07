@@ -1,6 +1,6 @@
 {
-  "manifestVersion": "20261007-143022",
-  "generatedAt": "2026-10-07T14:30:24.012031+00:00",
+  "manifestVersion": "20261007-143631",
+  "generatedAt": "2026-10-07T14:36:32.794422+00:00",
   "assets": [
     {
       "path": "vendor/leaflet.min.js",
@@ -56,7 +56,7 @@
   "shell": [
     {
       "path": "index.html",
-      "sha256": "06052005f94386a12900d823d27788a97e089dbcfb9e5089c977472951bb0e56",
+      "sha256": "f4a8ab31094e8082030ca2bbca4dd18239c72f718d858c61a7c27a71178cd41e",
       "bytes": 25304
     },
     {
@@ -81,8 +81,8 @@
     },
     {
       "path": "stats-config.js",
-      "sha256": "519d0c96d8fecbd0dccd9594a17f266aca0c97c11ad8f6f89356c1cae9bed21b",
-      "bytes": 5065
+      "sha256": "cc98ec3936d6dd27a1faf6446a8788edda06413f49fd51ee4bf874dca4b6aa04",
+      "bytes": 5142
     },
     {
       "path": "stats-data.js",
@@ -106,7 +106,7 @@
     },
     {
       "path": "app-state.js",
-      "sha256": "5b3c4d3a447cc342e4b3daaf3219227828fc355c85d3945f218c6c4374d0674b",
+      "sha256": "e84d48aaca33066fbcfc0bfc028679109137f0035c66a2915d672c992203bec7",
       "bytes": 11644
     },
     {
