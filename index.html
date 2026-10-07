@@ -1,540 +1,71 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>RouteRunner</title>
-<link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#0b0e1a">
-<meta name="app-version" content="20261007-210441">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="apple-touch-icon" href="icon-192.png">
-<link rel="icon" type="image/png" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20261007-210441">
-<link rel="stylesheet" href="vendor/leaflet.css">
-<script>
-/* Stale-code gate: runs before anything else. If this HTML is stale
- * (cached by SW or browser), the version won't match version.json and we
- * force a cache-busting reload immediately. */
-(function () {
-  try {
-    var stamped = document.querySelector('meta[name="app-version"]');
-    var local = stamped ? stamped.getAttribute('content') : '';
-    // Skip if this is already a cache-busted reload (avoid loops).
-    if (/[?&]v=/.test(location.search)) return;
-    if (!local || local.indexOf('20261007-210441') !== -1) return; // dev, unstamped
-    fetch('version.json', { cache: 'no-store' }).then(function (r) {
-      return r.ok ? r.json() : null;
-    }).then(function (info) {
-      if (info && info.version && info.version !== local) {
-        var u = new URL(location.href);
-        u.searchParams.set('v', info.version);
-        location.replace(u.toString());
-      }
-    }).catch(function () {});
-  } catch (e) {}
-})();
-</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Old RouteRunner site -> Stopflow redirect (rebrand spec §7).
+  STAGED ONLY — NOT PUSHED. Deployed via the existing GitHub Pages path one
+  final time (replacing https://abrown9299-coder.github.io/route-runner/),
+  then that deploy path is retired.
+-->
+<meta http-equiv="refresh" content="0;url=https://stopflow.io">
+<title>Stopflow has moved</title>
+<style>
+  /* Stopflow brand palette, inline (spec §2): navy #0B1B33, teal #0E7C7B,
+     aqua #2DD4BF, ink #E8F1F2, muted #8AA0B4. */
+  :root{
+    --sf-navy:#0B1B33; --sf-teal:#0E7C7B; --sf-aqua:#2DD4BF;
+    --sf-ink:#E8F1F2; --sf-muted:#8AA0B4;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    background:var(--sf-navy); color:var(--sf-ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  .card{text-align:center; padding:2.5rem 2rem; max-width:26rem}
+  .mark{
+    width:64px; height:64px; margin:0 auto 1rem; border-radius:18px;
+    background:linear-gradient(135deg,var(--sf-teal),var(--sf-aqua));
+    display:flex; align-items:center; justify-content:center;
+    font-size:2rem; font-weight:800; color:var(--sf-navy);
+  }
+  h1{font-size:1.5rem; margin:0 0 .5rem}
+  p{color:var(--sf-muted); margin:0 0 1.5rem; line-height:1.5}
+  a.btn{
+    display:inline-block; padding:.9rem 2rem; border-radius:999px;
+    background:var(--sf-teal); color:#fff; text-decoration:none;
+    font-weight:700; font-size:1.05rem;
+  }
+  a.btn:active{background:var(--sf-aqua)}
+  .url{margin-top:1rem; font-size:.85rem; color:var(--sf-muted); word-break:break-all}
+  .url a, noscript a{color:var(--sf-aqua)}
+</style>
 </head>
 <body>
-
-<!-- Approximate-location banner: shown when GPS accuracy > 100m (iOS
-     "Precise Location" off). Non-blocking — the app works, just warns. -->
-<div id="precisionBanner" hidden class="precision-banner">
-  📍 Approximate location detected. For best routing, enable Precise Location:
-  iOS Settings → Privacy → Location Services → Safari → Precise Location ON.
-  <button id="precisionBannerClose" class="icon-btn" aria-label="Dismiss">✕</button>
-</div>
-
-<!-- Install gate: RouteRunner must run installed, not in the browser.
-     Shown instantly by the inline script below; app.js fills in the steps. -->
-<div id="installGate" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2>📲 Install RouteRunner</h2></div>
-    <p class="fine">RouteRunner only runs as an installed app — it won't work in the browser. Follow these steps, then open it from your home screen:</p>
-    <ol id="installSteps" class="install-steps"></ol>
-  </div>
-</div>
-<script>
-(function () {
-  var standalone = false, isMobile = false;
-  try {
-    standalone = window.matchMedia('(display-mode: standalone)').matches ||
-                 window.navigator.standalone === true;
-    var ua = String(window.navigator.userAgent || '');
-    isMobile = /iPad|iPhone|iPod|Android/i.test(ua) ||
-               (window.navigator.maxTouchPoints > 1 && /Mac/i.test(ua));
-  } catch (e) {}
-  // desktop browsers are exempt — the gate is for phones only
-  if (!standalone && isMobile) {
-    var g = document.getElementById('installGate');
-    if (g) g.hidden = false;
-  }
-})();
-</script>
-
-<header id="topbar">
-  <div class="brand">
-    <span class="logo"><img src="icon-192.png" alt="RouteRunner" width="44" height="44"></span>
-    <div>
-      <h1>RouteRunner</h1>
-      <p id="routeDate"></p>
-    </div>
-  </div>
-  <div class="top-right">
-    <div id="progressWrap" title="Stops completed">
-      <svg viewBox="0 0 44 44" width="44" height="44">
-        <circle cx="22" cy="22" r="18" fill="none" stroke="#2a2f45" stroke-width="6"/>
-        <circle id="progressRing" cx="22" cy="22" r="18" fill="none" stroke="#22c55e"
-                stroke-width="6" stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113"
-                transform="rotate(-90 22 22)"/>
-      </svg>
-      <span id="progressText">0/0</span>
-    </div>
-    <button id="refreshBtn" class="icon-btn" aria-label="Refresh app">⟳</button>
-    <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙️</button>
-  </div>
-</header>
-
-<main>
-  <!-- Origin -->
-  <section id="originBar" class="card">
-    <button id="originBtn" class="origin-btn">
-      <span class="origin-pin">📍</span>
-      <span class="origin-text"><small>START</small><span id="originLabel">Current location</span></span>
-      <span class="origin-edit">✏️</span>
-    </button>
-  </section>
-
-  <!-- Add stops -->
-  <section id="addBar" class="card">
-    <div id="searchWrap">
-      <input id="searchInput" type="text" placeholder="🔍 Search address to add…" autocomplete="off"
-             enterkeyhint="search">
-      <ul id="suggestList" hidden></ul>
-    </div>
-    <div class="add-btns">
-      <button id="ocrBtn" class="btn secondary" title="Import from screenshots — work schedules, notes, or GPS apps">📷<span>Screenshots</span></button>
-      <input id="fileInput" type="file" accept="image/*" multiple hidden>
-    </div>
-    <div id="manualForm" hidden>
-      <input id="mStreet" placeholder="Street (e.g. 1014 Kirkwood Ave)">
-      <div class="mrow">
-        <input id="mCity" placeholder="City">
-        <input id="mState" placeholder="ST" value="TN" maxlength="2">
-        <input id="mZip" placeholder="ZIP" inputmode="numeric">
-      </div>
-      <input id="mJob" placeholder="Job type (optional)">
-      <button id="mAdd" class="btn primary">Add stop</button>
-    </div>
-  </section>
-
-  <!-- Route status -->
-  <div id="routeStatus" class="status-line"></div>
-
-  <!-- Stop list -->
-  <section id="listCard" class="card">
-    <div class="list-head">
-      <h2><span id="listTitle">Stops</span> <span id="stopCount"></span></h2>
-      <button id="mapToggle" class="btn ghost">🗺 Map</button>
-      <button id="clearAllBtn" class="btn ghost" style="display:none">🗑 Clear</button>
-    </div>
-    <div id="driveSummary" class="drive-summary" hidden></div>
-    <div id="mapWrap" hidden>
-      <div id="map"></div>
-      <div id="locationHint" hidden class="location-hint">
-        📍 Enable location for better results
-        <button id="locationHintRetry" class="btn secondary small">Retry</button>
-      </div>
-    </div>
-    <ul id="stopList"></ul>
-    <p id="emptyHint">No stops yet — add screenshots of your schedule or search an address above.</p>
-  </section>
+<main class="card">
+  <div class="mark" aria-hidden="true">S</div>
+  <h1>Stopflow has moved</h1>
+  <p>RouteRunner is now <strong>Stopflow</strong>. You&rsquo;re being redirected to the new home:</p>
+  <a class="btn" href="https://stopflow.io">Open Stopflow</a>
+  <p class="url">https://stopflow.io</p>
+  <noscript>
+    <p>JavaScript is off &mdash; tap the button above or open
+      <a href="https://stopflow.io">https://stopflow.io</a> to continue.</p>
+  </noscript>
 </main>
-
-<!-- Bottom action bar -->
-<nav id="actionBar">
-  <button id="optimizeBtn" class="btn primary big">⚡<span>Optimize</span></button>
-  <button id="mapsBtn" class="btn big">🗺️<span>Maps</span></button>
-</nav>
-
-<!-- OCR progress overlay -->
-<div id="ocrOverlay" hidden>
-  <div class="ocr-box">
-    <h3 id="ocrTitle">Reading screenshots…</h3>
-    <div class="ocr-bar"><div id="ocrBarFill"></div></div>
-    <p id="ocrStatus"></p>
-    <div id="ocrActions" class="btn-row" hidden>
-      <button id="ocrRetry" class="btn">↻ Retry</button>
-      <button id="ocrDismiss" class="btn ghost">Dismiss</button>
-    </div>
-  </div>
-</div>
-
-<!-- Origin search sheet -->
-<div id="originSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2>📍 Start location</h2><button id="originClose" class="icon-btn">✕</button></div>
-    <div id="originSearchWrap" style="position:relative">
-      <input id="originSearchInput" placeholder="Search address..." autocomplete="off">
-      <ul id="originSuggestList" hidden></ul>
-    </div>
-    <button id="originUseGps" class="btn" style="width:100%;margin-top:12px">📡 Use current location</button>
-  </div>
-</div>
-
-<!-- Settings sheet -->
-<div id="settingsSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2>Settings</h2><button id="settingsClose" class="icon-btn">✕</button></div>
-    <label class="set-row"><span>Profile</span><select id="setMode">
-      <option value="work">Work</option><option value="personal">Personal</option>
-    </select></label>
-    <p class="fine" id="modeHint">Work profile: confirmed windows, check-in, notes, job types.</p>
-    <label class="set-row check" id="setAutoCheckinRow"><span>Auto check-in at stops <small>(Work: GPS proximity)</small></span><input id="setAutoCheckin" type="checkbox"></label>
-    <label class="set-row check" id="setAutoConfirmRow"><span>Auto-confirm all stops <small>(Work: uses screenshot times)</small></span><input id="setAutoConfirm" type="checkbox"></label>
-    <label class="set-row check"><span>Suggest early-arrival shortcuts <small>(saves drive time)</small></span><input id="setEarlySuggest" type="checkbox"></label>
-    <label class="set-row check"><span>Avoid tolls</span><input id="setTolls" type="checkbox"></label>
-    <label class="set-row check"><span>Avoid highways</span><input id="setHwy" type="checkbox"></label>
-    <label class="set-row check"><span>Return to start at end</span><input id="setReturn" type="checkbox"></label>
-    <label class="set-row check"><span>Save route history</span><input id="setHistory" type="checkbox"></label>
-    <div class="set-sec" id="savedSec">
-      <h3>⭐ Saved locations</h3>
-      <p class="fine">Tap the ⭐ on any address to save it here. Saved places appear first in every address dropdown.</p>
-      <ul id="savedList" class="saved-list"></ul>
-      <button id="addSavedBtn" class="btn secondary" style="width:100%;margin-top:8px">＋ Add location</button>
-    </div>
-    <div class="set-sec" id="svcSec">
-      <h3>Service times</h3>
-      <label class="set-row"><span>Default service time</span><select id="setSvcDefault"></select></label>
-      <div id="svcRows"></div>
-      <button id="svcResetAll" class="btn">Reset all to default</button>
-      <p class="fine">Job types are learned from your imports over time — each can have its own duration.</p>
-    </div>
-    <div class="set-sec">
-      <h3>Offline maps</h3>
-      <p class="fine">Map tiles for your current area are saved on this device so the map works without a signal.</p>
-      <div class="btn-row">
-        <button id="tilesRefresh" class="btn secondary">Refresh offline map tiles</button>
-        <button id="tilesClear" class="btn secondary">Clear offline map tiles</button>
-      </div>
-      <p class="fine" id="tilesStatus"></p>
-    </div>
-    <button id="clearRoute" class="btn danger">🗑 Clear current route</button>
-    <button id="shareBtn" class="btn">🔗 Share the app</button>
-    <button id="updateBtn" class="btn">⬆️ Check for updates</button>
-    <button id="diagBtn" class="btn">🛠 Download diagnostics</button>
-    <p class="fine">Version <span id="appVer">…</span></p>
-    <p class="fine">RouteRunner runs entirely on your phone. No account, no server, no AI.</p>
-  </div>
-</div>
-
-<!-- Add appointment / stop dialog (spec §5) -->
-<div id="apptSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2 id="apptTitle">➕ Add Appointment</h2><button id="apptClose" class="icon-btn">✕</button></div>
-    <label class="set-row"><span>Time</span>
-      <span style="display:flex;gap:8px;align-items:center">
-        <input id="apptTime" type="time" style="flex:1">
-        <label class="check-inline"><input id="apptAnytime" type="checkbox"> Anytime</label>
-      </span></label>
-    <label class="set-row"><span>Address</span>
-      <span style="display:flex;gap:8px;align-items:center">
-        <span id="apptAddrWrap" style="flex:1;position:relative">
-          <input id="apptAddr" placeholder="Street address…" autocomplete="off" style="width:100%">
-          <ul id="apptAddrSuggest" class="dd-list" hidden></ul>
-        </span>
-        <button id="apptStar" class="star-btn" title="Save this location">☆</button>
-      </span></label>
-    <label class="set-row" id="apptJobRow"><span>Job type</span>
-      <span style="display:flex;gap:8px;align-items:center">
-        <select id="apptJob" style="flex:1"></select>
-      </span></label>
-    <div id="apptNewJobWrap" hidden style="margin-top:8px">
-      <span style="display:flex;gap:8px">
-        <input id="apptNewJob" placeholder="New job type name…" style="flex:1">
-        <button id="apptNewJobAdd" class="btn secondary">Add</button>
-      </span>
-    </div>
-    <div class="btn-row" style="margin-top:16px">
-      <button id="apptSave" class="btn primary">Save</button>
-      <button id="apptCancel" class="btn secondary">Cancel</button>
-    </div>
-  </div>
-</div>
-
-<!-- Endpoint (start/end) address editor sheet -->
-<div id="epSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2 id="epTitle">📍 Start location</h2><button id="epClose" class="icon-btn">✕</button></div>
-    <span style="display:flex;gap:8px;align-items:center">
-      <span id="epWrap" style="flex:1;position:relative">
-        <input id="epInput" placeholder="Search address…" autocomplete="off" style="width:100%">
-        <ul id="epSuggest" class="dd-list" hidden></ul>
-      </span>
-      <button id="epStar" class="star-btn" title="Save this location">☆</button>
-    </span>
-    <button id="epGps" class="btn" style="width:100%;margin-top:12px">📡 Use current location</button>
-    <button id="epSave" class="btn primary" style="width:100%;margin-top:8px">Done</button>
-  </div>
-</div>
-
-<!-- Set-start/set-end chooser: one menu, three options -->
-<div id="setSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2 id="setTitle">Set beginning location</h2><button id="setClose" class="icon-btn">✕</button></div>
-    <button id="setGps" class="btn" style="width:100%">📍 Current location</button>
-    <button id="setSavedToggle" class="btn" style="width:100%;margin-top:8px">⭐ Saved locations</button>
-    <ul id="setSavedList" class="dd-list" hidden style="margin-top:8px"></ul>
-    <button id="setAdd" class="btn" style="width:100%;margin-top:8px">✏️ Add an address…</button>
-  </div>
-</div>
-
-<!-- Nickname popup for newly saved locations -->
-<div id="nickSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2>⭐ Save location</h2><button id="nickCancel" class="icon-btn">✕</button></div>
-    <p class="fine">Give it a nickname so it's easy to pick later.</p>
-    <input id="nickInput" placeholder="Nickname (e.g. Home, Office)" autocomplete="off" style="width:100%">
-    <p id="nickAddr" class="fine"></p>
-    <div class="btn-row" style="margin-top:12px">
-      <button id="nickSave" class="btn primary">Save</button>
-      <button id="nickCancel2" class="btn secondary">Cancel</button>
-    </div>
-  </div>
-</div>
-
-<!-- Add saved location (settings): address + nickname, geocoded before save -->
-<div id="addSavedSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2>⭐ Add saved location</h2><button id="addSavedClose" class="icon-btn">✕</button></div>
-    <p class="fine">Type an address (or pick from the list), give it a nickname, and it's saved for every address dropdown.</p>
-    <label class="set-row"><span>Address</span>
-      <span id="addSavedAddrWrap" style="flex:1;position:relative">
-        <input id="addSavedAddr" placeholder="Street address…" autocomplete="off" style="width:100%">
-        <ul id="addSavedSuggest" class="dd-list" hidden></ul>
-      </span></label>
-    <label class="set-row"><span>Nickname</span>
-      <input id="addSavedNick" placeholder="e.g. Home, Office" autocomplete="off" style="width:100%"></label>
-    <div class="btn-row" style="margin-top:16px">
-      <button id="addSavedSave" class="btn primary">Save location</button>
-      <button id="addSavedCancel" class="btn secondary">Cancel</button>
-    </div>
-  </div>
-</div>
-
-<!-- Confirm-stop time window popup -->
-<div id="winSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2>⏰ Confirm stop</h2><button id="winCancel" class="icon-btn">✕</button></div>
-    <p id="winAddr" class="fine"></p>
-    <p class="fine">Arrival window — you must arrive within these times (a 30-minute buffer is built in at the end).</p>
-    <div class="win-times">
-      <label>Arrive after<input id="winStart" type="time"></label>
-      <label>Arrive by<input id="winEnd" type="time"></label>
-    </div>
-    <button id="winOk" class="btn primary">✓ Confirm window</button>
-    <button id="winRemove" class="btn ghost danger" hidden>Remove window</button>
-  </div>
-</div>
-
-<!-- At-risk window warning -->
-<div id="riskSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2>⚠ Running behind</h2></div>
-    <p class="fine">These confirmed stops may miss their arrival window, even on the best route:</p>
-    <ul id="riskList" class="risk-list"></ul>
-    <label class="set-row check"><span>Don't warn me again for this route</span><input id="riskMute" type="checkbox"></label>
-    <button id="riskOk" class="btn primary">Got it</button>
-  </div>
-</div>
-
-<!-- Re-optimize for confirmed appointment -->
-<div id="reoptSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2>Re-optimizing route for confirmed appointment?</h2></div>
-    <p class="fine" id="reoptText">You're running behind — reordering stops could get you to your confirmed appointment on time.</p>
-    <div class="btn-row">
-      <button id="reoptYes" class="btn primary">Yes</button>
-      <button id="reoptNo" class="btn secondary">Keep as is</button>
-    </div>
-  </div>
-</div>
-
-<!-- Early-arrival suggestion -->
-<div id="earlySheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2>💡 Early arrival could save time</h2></div>
-    <p class="fine" id="earlyText"></p>
-    <div class="btn-row">
-      <button id="earlyYes" class="btn primary">Apply</button>
-      <button id="earlyNo" class="btn secondary">Dismiss</button>
-    </div>
-  </div>
-</div>
-
-<!-- GPS developer mode (hidden: 5 rapid taps on the header brand). Testing only — never persisted. -->
-<div id="devSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2>🧪 Dev · GPS override</h2><button id="devClose" class="icon-btn">✕</button></div>
-    <p class="fine" style="text-align:left">Testing only. Simulated GPS never leaves this page and is never saved.</p>
-    <div class="set-sec">
-      <h3>Manual position</h3>
-      <label class="set-row"><span>Latitude</span><input id="devLat" inputmode="decimal" placeholder="36.1622"></label>
-      <label class="set-row"><span>Longitude</span><input id="devLng" inputmode="decimal" placeholder="-86.7816"></label>
-      <div class="btn-row">
-        <button id="devSetPos" class="btn primary">Set position</button>
-        <button id="devClear" class="btn secondary">Clear override</button>
-      </div>
-    </div>
-    <div class="set-sec">
-      <h3>Simulate movement</h3>
-      <p class="fine">Moves the virtual position along the remaining stops, in route order.</p>
-      <label class="set-row"><span>Speed</span><select id="devSpeed">
-        <option value="1">1× walk (~5 km/h)</option>
-        <option value="10" selected>10× drive (~50 km/h)</option>
-        <option value="60">60× (~300 km/h)</option>
-      </select></label>
-      <div class="btn-row">
-        <button id="devSimStart" class="btn primary">▶ Simulate</button>
-        <button id="devSimStop" class="btn secondary">⏹ Stop</button>
-      </div>
-      <p class="fine" id="devSimStatus"></p>
-    </div>
-    <p class="fine" id="devPosLine">Virtual position: —</p>
-    <div class="set-sec">
-      <h3>Live ETA test tools</h3>
-      <p class="fine">Exercises the drive clock behind the 🚗 / arr / ⚠️ chips.</p>
-      <div class="btn-row">
-        <button id="devClockPlus" class="btn secondary">+5 min drive clock</button>
-        <button id="devLiveState" class="btn secondary">Show live ETA state</button>
-      </div>
-      <p class="fine" id="devLiveLine"></p>
-    </div>
-    <button id="devExit" class="btn danger" style="width:100%">Exit dev mode</button>
-  </div>
-</div>
-
-<!-- Leg chooser -->
-<div id="legSheet" hidden>
-  <div class="sheet">
-    <div class="sheet-head"><h2>Open in Google Maps</h2><button id="legClose" class="icon-btn">✕</button></div>
-    <p class="fine">Google Maps takes up to 10 stops per leg. Open each leg in order.</p>
-    <div id="legList"></div>
-  </div>
-</div>
-
-<div id="toast" hidden></div>
-
-<!-- GPS dev-mode indicator: shown only while a virtual position is active -->
-<div id="devBadge" hidden title="DEV MODE: GPS is simulated, not real">DEV · SIM GPS</div>
-
 <script>
-  /* Boot watchdog: if the app never finishes starting (blank page after an
-     interrupted update, a failed restore, a blocked script…), never leave the
-     user staring at a dead screen with no way out. One automatic reload is
-     attempted; if the page is still dead after that, an escape hatch is shown.
-     Inline on purpose — it must work even when app.js itself fails to load.
-     The 8s timer starts only after the install gate (window.RRInstall.ready)
-     settles: a long first install on a slow connection is legitimate, not a
-     dead boot (INSTALL_SPEC.md IR15). */
-  (function () {
-    'use strict';
-    var TRIED_KEY = 'rr.bootfail';
-    var armed = false;
-    function tried() {
-      try { return sessionStorage.getItem(TRIED_KEY) === '1'; } catch (e) { return false; }
-    }
-    function markTried() {
-      try { sessionStorage.setItem(TRIED_KEY, '1'); } catch (e) {}
-    }
-    function armWatchdog() {
-      if (armed) return; armed = true;
-      setTimeout(watchdogBody, 8000);
-    }
-    // install.js is a synchronous script later in the body; wait for it to
-    // define window.RRInstall before arming. If it never appears (blocked
-    // script), arm anyway — the app boots degraded and the watchdog applies.
-    function waitForInstaller(triesLeft) {
-      if (window.RRInstall && window.RRInstall.ready &&
-          typeof window.RRInstall.ready.then === 'function') {
-        window.RRInstall.ready.then(armWatchdog, armWatchdog);
-      } else if (triesLeft > 0) {
-        setTimeout(function () { waitForInstaller(triesLeft - 1); }, 250);
-      } else {
-        armWatchdog();
-      }
-    }
-    function watchdogBody() {
-      if (window.__rrBooted) return;
-      if (!tried()) { markTried(); location.reload(); return; }
-      document.body.innerHTML =
-        '<div style="min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;' +
-        'align-items:center;justify-content:center;background:#0b0e1a;color:#e8ecf4;' +
-        'font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;padding:28px;text-align:center">' +
-        '<div style="font-size:46px;margin-bottom:14px">🧭</div>' +
-        '<div style="font-size:20px;font-weight:700;margin-bottom:8px">RouteRunner didn&rsquo;t start</div>' +
-        '<div style="color:#9aa3b2;font-size:14px;line-height:1.5;margin-bottom:24px;max-width:300px">' +
-        'The app didn&rsquo;t finish loading. Your stops are saved on this device and won&rsquo;t be touched.</div>' +
-        '<button id="rrRetry" style="width:100%;max-width:300px;padding:15px;border:0;border-radius:12px;' +
-        'background:#3b82f6;color:#fff;font-size:17px;font-weight:700;margin-bottom:12px">Reload</button>' +
-        '<button id="rrNuke" style="width:100%;max-width:300px;padding:15px;border:1px solid #3a4356;' +
-        'border-radius:12px;background:transparent;color:#e8ecf4;font-size:16px">' +
-        'Clear app cache &amp; reload</button></div>';
-      document.getElementById('rrRetry').onclick = function () { location.reload(); };
-      document.getElementById('rrNuke').onclick = function () {
-        var done = function () { location.reload(); };
-        try {
-          var jobs = [];
-          if ('serviceWorker' in navigator && navigator.serviceWorker.getRegistrations) {
-            jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
-              return Promise.all(rs.map(function (r) { return r.unregister(); }));
-            }).catch(function () {}));
-          }
-          if (window.caches && caches.keys) {
-            jobs.push(caches.keys().then(function (keys) {
-              return Promise.all(keys.map(function (k) { return caches.delete(k); }));
-            }).catch(function () {}));
-          }
-          Promise.all(jobs).then(done, done);
-          setTimeout(done, 3000);
-        } catch (e) { done(); }
-      };
-    }
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', function () { waitForInstaller(8); });
-    } else {
-      waitForInstaller(8);
-    }
-  })();
+  // Kill the old RouteRunner service worker so installed phones don't keep
+  // serving the cached app shell instead of this redirect.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(function (rs) {
+      rs.forEach(function (r) { r.unregister(); });
+    });
+  }
+  // Primary redirect for JS-capable clients; the meta refresh above covers
+  // everyone else. replace() keeps the old URL out of the back-button history.
+  window.location.replace('https://stopflow.io');
 </script>
-<script src="vendor/Sortable.min.js"></script>
-<script src="core.js?v=20261007-210441"></script>
-<script src="ocr.js?v=20261007-210441"></script>
-<script src="install.js?v=20261007-210441"></script>
-<script src="stats-config.js?v=20261007-210441"></script>
-<script src="stats-data.js?v=20261007-210441"></script>
-<script src="stats-sanitize.js?v=20261007-210441"></script>
-<script src="stats-store.js?v=20261007-210441"></script>
-<script src="stats-report.js?v=20261007-210441"></script>
-<script src="app-state.js?v=20261007-210441"></script>
-<script src="app-stops.js?v=20261007-210441"></script>
-<script src="app-windows.js?v=20261007-210441"></script>
-<script src="app-search.js?v=20261007-210441"></script>
-<script src="app-sheets.js?v=20261007-210441"></script>
-<script src="app-ocr.js?v=20261007-210441"></script>
-<script src="app-geocode.js?v=20261007-210441"></script>
-<script src="app-probes.js"></script>
-<script src="app-gps.js?v=20261007-210441"></script>
-<script src="app-traffic.js?v=20261007-210441"></script>
-<script src="app-optimize.js?v=20261007-210441"></script>
-<script src="app-live.js"></script>
-<script src="app-map.js?v=20261007-210441"></script>
-<script src="app-route.js?v=20261007-210441"></script>
-<script src="app-saved.js?v=20261007-210441"></script>
-<script src="app-settings.js?v=20261007-210441"></script>
-<script src="app-boot.js?v=20261007-210441"></script>
 </body>
 </html>
