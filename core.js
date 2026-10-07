@@ -1545,7 +1545,10 @@ function formatMins(mins) {
 
 /* Label for one stop: "street, city, ST zip" — or "lat,lng" when the
  * address parts are missing (e.g. a hand-dropped map pin). */
-function stopLabel(s) {
+// Renamed 2026-10-06 (module split): app/app-stops.js now defines a global stopLabel
+// (prefers address string); this one prefers coordinates and is only used by
+// buildMapsLinks below. The rename preserves the original call semantics exactly.
+function stopLabelCoords(s) {
   // Prefer coordinates: Google Maps always routes to exact lat/lng, even
   // when its address database lacks the street address (e.g. "3500 Saindon St").
   if (s && typeof s.lat === 'number' && typeof s.lng === 'number') {
@@ -1590,12 +1593,12 @@ function buildMapsLinks(originLabel, orderedStops, opts) {
       else             { wps = stops.slice(i + 1, i + 10); destIdx = i + 10; }
     }
 
-    var dest = stopLabel(stops[destIdx]);
+    var dest = stopLabelCoords(stops[destIdx]);
     var url = 'https://www.google.com/maps/dir/?api=1' +
       (origin ? '&origin=' + encodeURIComponent(origin) : '') +
       '&destination=' + encodeURIComponent(dest) +
       (wps.length
-        ? '&waypoints=' + wps.map(function (s) { return encodeURIComponent(stopLabel(s)); }).join('|')
+        ? '&waypoints=' + wps.map(function (s) { return encodeURIComponent(stopLabelCoords(s)); }).join('|')
         : '') +
       '&travelmode=driving' +
       avoidParam;

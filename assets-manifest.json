@@ -1,6 +1,6 @@
 {
-  "manifestVersion": "20261006-192324",
-  "generatedAt": "2026-10-06T19:23:25.024872+00:00",
+  "manifestVersion": "20261007-001133",
+  "generatedAt": "2026-10-07T00:11:34.067609+00:00",
   "assets": [
     {
       "path": "vendor/leaflet.min.js",
@@ -56,8 +56,8 @@
   "shell": [
     {
       "path": "index.html",
-      "sha256": "be603080dd11b46c9ae4e2e0785eab9a6764f6c75e9ca4c964a80ca87acf358b",
-      "bytes": 24283
+      "sha256": "b0e7489c541d61c738946ce2249a618665d1eeb5850157a6d2f72bda3f81198d",
+      "bytes": 25304
     },
     {
       "path": "styles.css",
@@ -65,14 +65,9 @@
       "bytes": 23345
     },
     {
-      "path": "app.js",
-      "sha256": "a8e49447ba6c847fba710032336a02a43503ac88e36d3709d4a55dc877b0bf8a",
-      "bytes": 170511
-    },
-    {
       "path": "core.js",
-      "sha256": "0a49cd1632b7b0cb7ce37bb16edf82aeacd6b1c6d9cef3bdabb894ec94747abd",
-      "bytes": 76497
+      "sha256": "879e592da1dc7a7309d95af711d0f206454c2d651a20b76a20794054b392d2ec",
+      "bytes": 76762
     },
     {
       "path": "ocr.js",
@@ -85,9 +80,104 @@
       "bytes": 33135
     },
     {
-      "path": "stats.js",
-      "sha256": "2f3ee00a0f085965115ff32beac7856deb4c449147a771bd66b43cf36fd86d8e",
-      "bytes": 70744
+      "path": "stats-config.js",
+      "sha256": "519d0c96d8fecbd0dccd9594a17f266aca0c97c11ad8f6f89356c1cae9bed21b",
+      "bytes": 5065
+    },
+    {
+      "path": "stats-data.js",
+      "sha256": "b5b6d42ae36bde22272f0ec2daf973f95e89b960fdcb68e5b49501c1cff447ce",
+      "bytes": 47026
+    },
+    {
+      "path": "stats-sanitize.js",
+      "sha256": "fa8b4c1e8872be36b77604f3e4702888b0be68474f88c14b4d66aedb47179cf2",
+      "bytes": 3667
+    },
+    {
+      "path": "stats-store.js",
+      "sha256": "ce0b122a8975cfd0833d3ef73180ab476bae868d781e80be4e36592093d3f3ce",
+      "bytes": 2582
+    },
+    {
+      "path": "stats-report.js",
+      "sha256": "2cbfa01165572f9b3473144167855930960a69947686cd3b59f362f012007c7f",
+      "bytes": 14202
+    },
+    {
+      "path": "app-state.js",
+      "sha256": "51cd2786542d89cc6c7c41dcb8deb3b6b6311ca03fa84193335ea231abb02d8e",
+      "bytes": 11588
+    },
+    {
+      "path": "app-stops.js",
+      "sha256": "813a0db5f9b20c972b4db60b878cf2e729c7fa1395108255bdd016f12e22a0d8",
+      "bytes": 25326
+    },
+    {
+      "path": "app-windows.js",
+      "sha256": "302c66afe9600d6a2ad47daa68352a4f7cf3dc6635b161b6fc1e9ede61dd8d28",
+      "bytes": 4744
+    },
+    {
+      "path": "app-search.js",
+      "sha256": "c0cd43dae0240a276f15451112e2bffd03a355c37b803641771a65f15a037748",
+      "bytes": 11578
+    },
+    {
+      "path": "app-sheets.js",
+      "sha256": "ca8d252240ef14e5cbd13fbc4dd3c07ec793bae7da08aa97887731a2bfe74af8",
+      "bytes": 4213
+    },
+    {
+      "path": "app-ocr.js",
+      "sha256": "2be366f19b3c032fbbf8e460c21bc899ef4cb658417047d39fbef5971525f089",
+      "bytes": 5892
+    },
+    {
+      "path": "app-geocode.js",
+      "sha256": "c4f11c085de32ec877352fbd430e7e3f606a5320ac4af02ada26123e50fd2f17",
+      "bytes": 15347
+    },
+    {
+      "path": "app-gps.js",
+      "sha256": "c8955017873578add6fdb77b258cec503965dd3a366656a67ca69d612a38f9b0",
+      "bytes": 12142
+    },
+    {
+      "path": "app-traffic.js",
+      "sha256": "9fe7ea538cfd1f578e8492cfe3f3a86d91314ac96c270b71c6916a00d97a26a8",
+      "bytes": 7024
+    },
+    {
+      "path": "app-optimize.js",
+      "sha256": "e06429c3edbea876f3103b9278fc814f8bbf089c9ba5f07941a036241e2d8aeb",
+      "bytes": 32114
+    },
+    {
+      "path": "app-map.js",
+      "sha256": "ce62bc8829c2b5d00501d13a7b93cb834742d879cc9c618717416c7d795f12e1",
+      "bytes": 10489
+    },
+    {
+      "path": "app-route.js",
+      "sha256": "a96b92c7debc70783db507ed705e212815a88f6bfa194e7c3afee67a9a1354b0",
+      "bytes": 10131
+    },
+    {
+      "path": "app-saved.js",
+      "sha256": "dbda16fe20020434d213fe7750a8afef40063b0bfb39e5cf0e143ef95ac90b7e",
+      "bytes": 17476
+    },
+    {
+      "path": "app-settings.js",
+      "sha256": "d1443972130a376ef8e2b1c7c5da4cffc6a1308469612ec4829dde386585d293",
+      "bytes": 8399
+    },
+    {
+      "path": "app-boot.js",
+      "sha256": "2133f668eb18a7e5641c087a781248b96a68e59f2970be5831650d209d00e669",
+      "bytes": 4842
     },
     {
       "path": "manifest.json",

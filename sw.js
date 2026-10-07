@@ -1,8 +1,16 @@
-/* RouteRunner service worker — offline app shell. 20261006-192324 is stamped by dev/deploy.py. */
+/* RouteRunner service worker — offline app shell. 20261007-001133 is stamped by dev/deploy.py. */
 /* global Request: readonly, Response: readonly */
-const CACHE = 'routerunner-20261006-192324';
+const CACHE = 'routerunner-20261007-001133';
+// 2026-10-06: app.js/stats.js were split into modules — must match deploy.py SHELL_FILES.
 const SHELL = [
-  './', './index.html', './styles.css', './app.js', './core.js', './ocr.js', './install.js', './stats.js',
+  './', './index.html', './styles.css',
+  './core.js', './ocr.js', './install.js',
+  './stats-config.js', './stats-data.js', './stats-sanitize.js', './stats-store.js',
+  './stats-report.js',
+  './app-state.js', './app-stops.js', './app-windows.js', './app-search.js',
+  './app-sheets.js', './app-ocr.js', './app-geocode.js', './app-gps.js',
+  './app-traffic.js', './app-optimize.js', './app-map.js', './app-route.js',
+  './app-saved.js', './app-settings.js', './app-boot.js',
   './manifest.json', './icon-192.png', './icon-512.png',
 ];
 // Caches the install/update system owns — activate must never delete these
