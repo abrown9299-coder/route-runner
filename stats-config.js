@@ -17,7 +17,7 @@
  *    then truncated) AND the server re-sanitizes before storage. Nothing
  *    identifying ever leaves the device.
  *  - The ingest key is a low-privilege key stamped at build time by
- *    dev/deploy.py (placeholder __STATS_INGEST_KEY__ — never committed).
+ *    dev/deploy.py (placeholder rring_d36b7c0bb12a90a32c0aa5b740f40acfc8a1dd852a7e869b — never committed).
  *    Dev builds (APP_VERSION == 'dev' or unstamped) disable stats entirely.
  *
  * Loaded by index.html BEFORE app.js. Exposes a single global: window.Stats.
@@ -31,8 +31,8 @@
  */
 
   /* ---------- build-time placeholders (stamped by dev/deploy.py) ---------- */
-  var INGEST_KEY = '__STATS_INGEST_KEY__'; // -> rring_… (600-perm file on the server, read at deploy time)
-  var GATEWAY = '__STATS_GATEWAY__';       // -> e.g. https://40.160.37.237:8443
+  var INGEST_KEY = 'rring_d36b7c0bb12a90a32c0aa5b740f40acfc8a1dd852a7e869b'; // -> rring_… (600-perm file on the server, read at deploy time)
+  var GATEWAY = 'https://40.160.37.237:8443';       // -> e.g. https://40.160.37.237:8443
   // Split literals: these must NEVER contain the contiguous placeholder bytes,
   // or the deploy-time replacement would stamp them too and the enabled-check
   // below could never tell a stamped build from an unstamped one. (Same
