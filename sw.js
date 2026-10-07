@@ -1,6 +1,6 @@
-/* RouteRunner service worker — offline app shell. 20261007-202223 is stamped by dev/deploy.py. */
+/* RouteRunner service worker — offline app shell. 20261007-210441 is stamped by dev/deploy.py. */
 /* global Request: readonly, Response: readonly */
-const CACHE = 'routerunner-20261007-202223';
+const CACHE = 'routerunner-20261007-210441';
 // 2026-10-06: app.js/stats.js were split into modules — must match deploy.py SHELL_FILES.
 const SHELL = [
   './', './index.html', './styles.css',
@@ -104,6 +104,16 @@ self.addEventListener('fetch', (e) => {
         caches.open(CACHE).then((c) => c.put(e.request, copy));
       }
       return res;
-    }).catch(() => caches.match(e.request).then((hit) => hit || caches.match('./index.html')))
+    }).catch((err) => caches.match(e.request).then((hit) => {
+      if (hit) return hit;
+      // 2026-10-07 (stopflow.io migration): the SPA fallback must apply to
+      // navigations ONLY. Returning cached index.html (HTTP 200) for a failed
+      // tile/API/asset fetch makes the app believe it succeeded — the tile
+      // loader sees resp.ok === true, caches HTML as a "tile" (gray tiles),
+      // and the OSMF emergency fallback never fires. Let non-navigation
+      // failures reject so the app's own fallback logic can run.
+      if (e.request.mode === 'navigate') return caches.match('./index.html');
+      throw err;
+    }))
   );
 });
